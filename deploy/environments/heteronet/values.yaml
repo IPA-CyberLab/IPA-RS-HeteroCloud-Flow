@@ -62,6 +62,9 @@ livekit:
   signal:
     publicService:
       enabled: false
+  rtc:
+    annotations:
+      networking.heteronetwork.io/ingress-replicas: "3"
   resources:
     requests:
       cpu: "1"
@@ -78,6 +81,8 @@ coturn:
     requests:
       cpu: 100m
       memory: 128Mi
+  annotations:
+    networking.heteronetwork.io/ingress-replicas: "3"
 
 redis:
   enabled: true
