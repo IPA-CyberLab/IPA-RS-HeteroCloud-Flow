@@ -330,7 +330,7 @@ impl ServiceInstanceReconcile {
                 max: i64::MAX,
             });
         }
-        validate_name("name", &self.name, 120)?;
+        validate_display_name("name", &self.name, 120)?;
         ensure_json_object("spec", &self.spec)
     }
 }
@@ -415,6 +415,18 @@ pub fn validate_name(field: &'static str, value: &str, max: usize) -> Result<(),
     Ok(())
 }
 
+fn validate_display_name(
+    field: &'static str,
+    value: &str,
+    max: usize,
+) -> Result<(), ValidationError> {
+    let length = value.trim().chars().count();
+    if length == 0 || length > max {
+        return Err(ValidationError::InvalidIdentifier { field, max });
+    }
+    Ok(())
+}
+
 fn ensure_json_object(field: &'static str, value: &Value) -> Result<(), ValidationError> {
     if value.is_object() {
         Ok(())
@@ -431,7 +443,9 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    use super::{NewTicket, PrincipalContext, SessionMode, ValidationError};
+    use super::{
+        NewTicket, PrincipalContext, ServiceInstanceReconcile, SessionMode, ValidationError,
+    };
 
     #[test]
     fn principal_wildcard_permission_is_honored() {
@@ -470,6 +484,44 @@ mod tests {
             ticket.validate(),
             Err(ValidationError::InvalidCharacters {
                 field: "queue_name"
+            })
+        );
+    }
+
+    #[test]
+    fn service_instance_accepts_heterocloud_display_name() {
+        let reconcile = ServiceInstanceReconcile {
+            jwt_id: Uuid::new_v4(),
+            organization_id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            service_instance_id: Uuid::new_v4(),
+            principal_id: Uuid::new_v4(),
+            generation: 1,
+            name: "Flow E2E".into(),
+            spec: json!({}),
+        };
+
+        assert!(reconcile.validate().is_ok());
+    }
+
+    #[test]
+    fn service_instance_rejects_blank_display_name() {
+        let reconcile = ServiceInstanceReconcile {
+            jwt_id: Uuid::new_v4(),
+            organization_id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            service_instance_id: Uuid::new_v4(),
+            principal_id: Uuid::new_v4(),
+            generation: 1,
+            name: "   ".into(),
+            spec: json!({}),
+        };
+
+        assert_eq!(
+            reconcile.validate(),
+            Err(ValidationError::InvalidIdentifier {
+                field: "name",
+                max: 120
             })
         );
     }
