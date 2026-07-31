@@ -62,6 +62,10 @@ livekit:
   signal:
     publicService:
       enabled: false
+  resources:
+    requests:
+      cpu: "1"
+      memory: 512Mi
 
 coturn:
   replicaCount: 3
@@ -70,6 +74,10 @@ coturn:
     - turn-a.163-220-236-51.sslip.io
     - turn-b.163-220-236-52.sslip.io
     - turn-c.163-220-236-53.sslip.io
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
 
 redis:
   enabled: true
