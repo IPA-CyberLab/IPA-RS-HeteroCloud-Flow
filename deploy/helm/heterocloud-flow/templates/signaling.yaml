@@ -1,0 +1,184 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flow.fullname" . }}-signaling
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: signaling
+spec:
+  replicas: {{ .Values.signaling.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  selector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: signaling
+  template:
+    metadata:
+      labels:
+        {{- include "flow.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: signaling
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "flow.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- if .Values.runtime.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      securityContext:
+        {{- include "flow.podSecurityContext" . | nindent 8 }}
+      topologySpreadConstraints:
+        {{- include "flow.topologySpread" (dict "root" . "component" "signaling") | nindent 8 }}
+      affinity:
+        {{- include "flow.requiredPodAntiAffinity" (dict "root" . "component" "signaling") | nindent 8 }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: signaling
+          image: {{ include "flow.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/flow-signaling"]
+          ports:
+            - name: websocket
+              containerPort: 8082
+              protocol: TCP
+          env:
+            {{- if .Values.runtime.hostNetwork }}
+            - name: FLOW_HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: FLOW_SIGNALING_BIND_ADDR
+              value: "$(FLOW_HOST_IP):8082"
+            {{- else }}
+            - name: FLOW_SIGNALING_BIND_ADDR
+              value: "0.0.0.0:8082"
+            {{- end }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flow.secretName" . }}
+                  key: database-url
+            - name: DATABASE_MAX_CONNECTIONS
+              value: {{ .Values.database.maxConnections.signaling | quote }}
+            - name: MIGRATE_ON_START
+              value: "false"
+            - name: FLOW_PRINCIPAL_ISSUER
+              value: {{ .Values.principalAuth.issuer | quote }}
+            - name: FLOW_PRINCIPAL_AUDIENCE
+              value: {{ .Values.principalAuth.audience | quote }}
+            - name: FLOW_PRINCIPAL_MAX_TTL_SECONDS
+              value: {{ .Values.principalAuth.maxTokenTtlSeconds | quote }}
+            - name: FLOW_PRINCIPAL_CONTEXT_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flow.secretName" . }}
+                  key: {{ .Values.principalAuth.contextSecretKey }}
+            - name: SIGNAL_AUTH_TIMEOUT_SECONDS
+              value: {{ .Values.signaling.authTimeoutSeconds | quote }}
+            {{- if or .Values.redis.enabled .Values.externalRedis.sentinelUrls }}
+            - name: REDIS_SENTINEL_URLS
+              value: {{ include "flow.redisSentinelUrls" . | quote }}
+            - name: REDIS_SENTINEL_MASTER
+              value: {{ include "flow.redisSentinelMaster" . | quote }}
+            {{- else }}
+            - name: REDIS_URL
+              value: {{ required "externalRedis.address is required" .Values.externalRedis.address | quote }}
+            {{- end }}
+            {{- if and (not .Values.redis.enabled) .Values.externalRedis.passwordSecretKey }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flow.secretName" . }}
+                  key: {{ .Values.externalRedis.passwordSecretKey }}
+            {{- end }}
+            {{- if and (not .Values.redis.enabled) .Values.externalRedis.sentinelPasswordSecretKey }}
+            - name: REDIS_SENTINEL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flow.secretName" . }}
+                  key: {{ .Values.externalRedis.sentinelPasswordSecretKey }}
+            {{- end }}
+            - name: RUST_LOG
+              value: info
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: websocket
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: websocket
+            periodSeconds: 10
+            timeoutSeconds: 2
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: websocket
+            periodSeconds: 2
+            failureThreshold: 30
+          securityContext:
+            {{- include "flow.rustSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.signaling.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flow.fullname" . }}-signaling
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: signaling
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "flow.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: signaling
+  ports:
+    - name: websocket
+      port: {{ .Values.signaling.service.port }}
+      targetPort: websocket
+      protocol: TCP
+      appProtocol: http
+{{- if .Values.signaling.publicService.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flow.fullname" . }}-signaling-public
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: signaling
+  annotations:
+    {{- toYaml .Values.signaling.publicService.annotations | nindent 4 }}
+spec:
+  type: LoadBalancer
+  loadBalancerClass: heteronetwork.io/public
+  allocateLoadBalancerNodePorts: false
+  externalTrafficPolicy: Cluster
+  selector:
+    {{- include "flow.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: signaling
+  ports:
+    - name: websocket
+      port: {{ .Values.signaling.publicService.port }}
+      targetPort: websocket
+      protocol: TCP
+      appProtocol: http
+{{- end }}

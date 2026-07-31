@@ -1,0 +1,47 @@
+{{- if not .Values.livekit.existingConfigSecret }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "flow.fullname" . }}-livekit-config
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: livekit
+data:
+  livekit.yaml: |
+    port: 7880
+    redis:
+      {{- if or .Values.redis.enabled .Values.externalRedis.sentinelUrls }}
+      sentinel_master_name: {{ include "flow.redisSentinelMaster" . }}
+      sentinel_addresses:
+        {{- if .Values.redis.enabled }}
+        - {{ .Values.redis.fullnameOverride }}:26379
+        {{- else }}
+        {{- range .Values.externalRedis.sentinelUrls }}
+        - {{ trimPrefix "redis://" . }}
+        {{- end }}
+        {{- end }}
+      {{- else }}
+      address: {{ required "externalRedis.address is required when Redis Sentinel is disabled" .Values.externalRedis.address }}
+      {{- end }}
+    rtc:
+      tcp_port: {{ .Values.livekit.rtc.tcpPort }}
+      udp_port: {{ .Values.livekit.rtc.udpPort }}
+      use_external_ip: true
+      turn_servers:
+      {{- $root := . }}
+      {{- range $host := .Values.coturn.publicHosts }}
+        - host: {{ $host | quote }}
+          port: {{ $root.Values.coturn.servicePort }}
+          protocol: udp
+          secret_file: /etc/livekit-turn/turn-shared-secret
+          ttl: {{ $root.Values.coturn.credentialTtlSeconds }}
+        - host: {{ $host | quote }}
+          port: {{ $root.Values.coturn.servicePort }}
+          protocol: tcp
+          secret_file: /etc/livekit-turn/turn-shared-secret
+          ttl: {{ $root.Values.coturn.credentialTtlSeconds }}
+      {{- end }}
+    logging:
+      level: info
+      json: true
+{{- end }}

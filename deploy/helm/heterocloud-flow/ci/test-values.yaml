@@ -1,0 +1,68 @@
+image:
+  repository: example.invalid/heterocloud-flow
+  tag: test
+
+secrets:
+  existingSecret: ""
+  create: true
+  values:
+    databaseUrl: postgres://flow:flow-test-password@heterocloud-flow-postgresql-pgpool:5432/flow
+    heterocloudProviderPublicKeysJson: '{"heterocloud-provider-1":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAQnTjC0+B/djS2k/sebsW6/7yCb+Am2NFtI1EzKH/ZTA=\n-----END PUBLIC KEY-----\n"}'
+    flowPrincipalContextHmacSecret: test-context-secret-that-is-at-least-thirty-two-bytes
+    livekitApiKey: flow-test
+    livekitApiSecret: test-livekit-secret-that-is-at-least-thirty-two-bytes
+    turnSharedSecret: test-turn-secret-that-is-at-least-thirty-two-bytes
+
+signaling:
+  publicUrls:
+    - wss://flow-a.example.test
+    - wss://flow-b.example.test
+    - wss://flow-c.example.test
+  publicService:
+    enabled: true
+
+livekit:
+  publicUrls:
+    - wss://rtc-a.example.test
+    - wss://rtc-b.example.test
+    - wss://rtc-c.example.test
+  signal:
+    publicService:
+      enabled: true
+
+api:
+  publicUrls:
+    - https://flow-a.example.test
+    - https://flow-b.example.test
+    - https://flow-c.example.test
+  publicService:
+    enabled: true
+
+coturn:
+  realm: turn.example.test
+  publicHosts:
+    - turn-a.example.test
+    - turn-b.example.test
+    - turn-c.example.test
+
+redis:
+  master:
+    persistence:
+      enabled: false
+  replica:
+    persistence:
+      enabled: false
+
+postgresql-ha:
+  enabled: true
+  postgresql:
+    username: flow
+    password: flow-test-password
+    postgresPassword: postgres-test-password
+    database: flow
+    repmgrPassword: repmgr-test-password
+    persistence:
+      enabled: false
+  pgpool:
+    adminPassword: pgpool-test-password
+    srCheckPassword: flow-test-password

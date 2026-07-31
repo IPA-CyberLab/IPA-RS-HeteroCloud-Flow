@@ -1,0 +1,7 @@
+/target/
+/.env
+/.idea/
+/.vscode/
+/deploy/helm/heterocloud-flow/charts/
+*.swp
+

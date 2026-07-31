@@ -1,0 +1,20 @@
+[package]
+name = "flow-livekit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+flow-domain.workspace = true
+livekit-api.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

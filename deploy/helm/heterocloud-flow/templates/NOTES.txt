@@ -1,0 +1,28 @@
+HeteroCloud Flow has been rendered with three replicas per Flow service.
+
+Internal API:
+  http://{{ include "flow.fullname" . }}-api.{{ .Release.Namespace }}.svc:8080
+
+Watch HeteroNetwork public addresses:
+  kubectl -n {{ .Release.Namespace }} get service \
+    {{- if .Values.api.publicService.enabled }}
+    {{ include "flow.fullname" . }}-api-public \
+    {{- end }}
+    {{- if .Values.signaling.publicService.enabled }}
+    {{ include "flow.fullname" . }}-signaling-public \
+    {{- end }}
+    {{- if .Values.livekit.signal.publicService.enabled }}
+    {{ include "flow.fullname" . }}-livekit-signal-public \
+    {{- end }}
+    {{ include "flow.fullname" . }}-livekit-rtc \
+    {{ include "flow.fullname" . }}-turn -w
+
+Confirm the configured public URLs resolve to the assigned addresses:
+  Flow API: {{ join ", " .Values.api.publicUrls }}
+  Flow signaling: {{ join ", " .Values.signaling.publicUrls }}
+  LiveKit signal: {{ join ", " .Values.livekit.publicUrls }}
+  TURN hosts: {{ join ", " .Values.coturn.publicHosts }}
+
+Flow and LiveKit listeners are HTTP internally. The configured HTTPS/WSS
+hostnames require per-node HeteroNetwork Caddy TLS termination. Stable multi-A
+DNS and certificate provisioning are external to this chart.

@@ -1,0 +1,6 @@
+.git
+.github
+target
+deploy/helm/heterocloud-flow/charts
+*.md
+

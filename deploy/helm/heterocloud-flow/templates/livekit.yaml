@@ -1,0 +1,241 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flow.fullname" . }}-livekit
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: livekit
+spec:
+  replicas: {{ .Values.livekit.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  selector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: livekit
+  template:
+    metadata:
+      labels:
+        {{- include "flow.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: livekit
+        networking.heteronetwork.io/traffic-mode: direct
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/livekit-config.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "flow.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        {{- include "flow.topologySpread" (dict "root" . "component" "livekit") | nindent 8 }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "flow.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: livekit
+      terminationGracePeriodSeconds: 18000
+      containers:
+        - name: livekit
+          image: "{{ .Values.livekit.image.repository }}:{{ .Values.livekit.image.tag }}"
+          imagePullPolicy: {{ .Values.livekit.image.pullPolicy }}
+          args:
+            - --config
+            - /etc/livekit/livekit.yaml
+            - --key-file
+            - /etc/livekit-keys/livekit-keys.yaml
+            - --bind
+            - $(FLOW_HOST_IP)
+          env:
+            - name: FLOW_HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          ports:
+            - name: signal
+              containerPort: 7880
+              protocol: TCP
+            - name: rtc-tcp
+              containerPort: {{ .Values.livekit.rtc.tcpPort }}
+              hostPort: {{ .Values.livekit.rtc.tcpPort }}
+              protocol: TCP
+            - name: rtc-udp
+              containerPort: {{ .Values.livekit.rtc.udpPort }}
+              hostPort: {{ .Values.livekit.rtc.udpPort }}
+              protocol: UDP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: signal
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: signal
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 5
+          startupProbe:
+            httpGet:
+              path: /
+              port: signal
+            periodSeconds: 2
+            failureThreshold: 60
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          resources:
+            {{- toYaml .Values.livekit.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/livekit
+              readOnly: true
+            - name: keys
+              mountPath: /etc/livekit-keys
+              readOnly: true
+            - name: turn-secret
+              mountPath: /etc/livekit-turn
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          {{- if .Values.livekit.existingConfigSecret }}
+          secret:
+            secretName: {{ .Values.livekit.existingConfigSecret }}
+          {{- else }}
+          configMap:
+            name: {{ include "flow.fullname" . }}-livekit-config
+          {{- end }}
+        - name: keys
+          secret:
+            secretName: {{ include "flow.secretName" . }}
+            items:
+              - key: livekit-keys.yaml
+                path: livekit-keys.yaml
+            defaultMode: 0400
+        - name: turn-secret
+          secret:
+            secretName: {{ include "flow.secretName" . }}
+            items:
+              - key: turn-shared-secret
+                path: turn-shared-secret
+            defaultMode: 0400
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flow.fullname" . }}-livekit
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: livekit
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "flow.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: livekit
+  ports:
+    - name: signal
+      port: 7880
+      targetPort: signal
+      protocol: TCP
+      appProtocol: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flow.fullname" . }}-livekit-signal
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: livekit
+  annotations:
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "flow.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: livekit
+  ports:
+    - name: signal
+      port: {{ .Values.livekit.signal.servicePort }}
+      targetPort: signal
+      protocol: TCP
+      appProtocol: http
+{{- if .Values.livekit.signal.publicService.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flow.fullname" . }}-livekit-signal-public
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: livekit
+  annotations:
+    {{- toYaml .Values.livekit.signal.publicService.annotations | nindent 4 }}
+spec:
+  type: LoadBalancer
+  loadBalancerClass: heteronetwork.io/public
+  allocateLoadBalancerNodePorts: false
+  externalTrafficPolicy: Cluster
+  selector:
+    {{- include "flow.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: livekit
+  ports:
+    - name: signal
+      port: {{ .Values.livekit.signal.publicService.port }}
+      targetPort: signal
+      protocol: TCP
+      appProtocol: http
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flow.fullname" . }}-livekit-rtc
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: livekit
+  annotations:
+    {{- toYaml .Values.livekit.rtc.annotations | nindent 4 }}
+spec:
+  type: LoadBalancer
+  loadBalancerClass: heteronetwork.io/public
+  allocateLoadBalancerNodePorts: false
+  externalTrafficPolicy: Local
+  selector:
+    {{- include "flow.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: livekit
+  ports:
+    - name: rtc-tcp
+      port: {{ .Values.livekit.rtc.tcpPort }}
+      targetPort: rtc-tcp
+      protocol: TCP
+    - name: rtc-udp
+      port: {{ .Values.livekit.rtc.udpPort }}
+      targetPort: rtc-udp
+      protocol: UDP

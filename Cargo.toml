@@ -1,0 +1,58 @@
+[workspace]
+members = [
+    "crates/flow-auth",
+    "crates/flow-domain",
+    "crates/flow-livekit",
+    "crates/flow-store",
+    "crates/flow-turn",
+    "crates/flow-api",
+    "crates/flow-matchmaker",
+    "crates/flow-signaling",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/IPA-CyberLab/IPA-RS-HeteroCloud-Flow"
+rust-version = "1.96"
+version = "0.1.0"
+
+[workspace.dependencies]
+anyhow = "1.0.102"
+axum = { version = "0.8.9", features = ["json", "macros", "ws"] }
+base64 = "0.22.1"
+chrono = { version = "0.4.44", features = ["serde"] }
+flow-auth = { path = "crates/flow-auth" }
+flow-domain = { path = "crates/flow-domain" }
+flow-livekit = { path = "crates/flow-livekit" }
+flow-store = { path = "crates/flow-store" }
+flow-turn = { path = "crates/flow-turn" }
+futures-util = "0.3.32"
+hmac = "0.12.1"
+http = "1.4.0"
+jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust_crypto", "use_pem"] }
+livekit-api = { version = "0.6.1", default-features = false, features = ["access-token", "rustls-tls-webpki-roots", "services-tokio"] }
+redis = { version = "1.5.0", default-features = false, features = ["connection-manager", "sentinel", "tokio-comp"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha1 = "0.10.6"
+sha2 = "0.10.9"
+sqlx = { version = "0.9.0", default-features = false, features = ["chrono", "derive", "json", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls-ring-webpki", "uuid"] }
+thiserror = "2.0.18"
+tokio = { version = "1.50.0", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tower-http = { version = "0.7.0", features = ["request-id", "trace"] }
+tower = { version = "0.5.3", features = ["util"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+url = "2.5.8"
+uuid = { version = "1.24.0", features = ["serde", "v4", "v7"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -2 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+too_many_lines = "allow"

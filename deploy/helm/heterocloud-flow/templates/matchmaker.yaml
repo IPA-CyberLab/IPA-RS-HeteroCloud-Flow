@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flow.fullname" . }}-matchmaker
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: matchmaker
+spec:
+  replicas: {{ .Values.matchmaker.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  selector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: matchmaker
+  template:
+    metadata:
+      labels:
+        {{- include "flow.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: matchmaker
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "flow.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- if .Values.runtime.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      securityContext:
+        {{- include "flow.podSecurityContext" . | nindent 8 }}
+      topologySpreadConstraints:
+        {{- include "flow.topologySpread" (dict "root" . "component" "matchmaker") | nindent 8 }}
+      affinity:
+        {{- include "flow.requiredPodAntiAffinity" (dict "root" . "component" "matchmaker") | nindent 8 }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: matchmaker
+          image: {{ include "flow.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/flow-matchmaker"]
+          ports:
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          env:
+            {{- if .Values.runtime.hostNetwork }}
+            - name: FLOW_HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: FLOW_MATCHMAKER_BIND_ADDR
+              value: "$(FLOW_HOST_IP):8081"
+            {{- else }}
+            - name: FLOW_MATCHMAKER_BIND_ADDR
+              value: "0.0.0.0:8081"
+            {{- end }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flow.secretName" . }}
+                  key: database-url
+            - name: DATABASE_MAX_CONNECTIONS
+              value: {{ .Values.database.maxConnections.matchmaker | quote }}
+            - name: MIGRATE_ON_START
+              value: "false"
+            - name: MATCHMAKER_POLL_INTERVAL_MS
+              value: {{ .Values.matchmaker.pollIntervalMs | quote }}
+            - name: MATCH_RESERVATION_TTL_SECONDS
+              value: {{ .Values.matchmaker.reservationTtlSeconds | quote }}
+            - name: LIVEKIT_URL
+              value: {{ .Values.livekit.internalUrl | quote }}
+            - name: LIVEKIT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flow.secretName" . }}
+                  key: livekit-api-key
+            - name: LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flow.secretName" . }}
+                  key: livekit-api-secret
+            - name: RUST_LOG
+              value: info
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 2
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            periodSeconds: 2
+            failureThreshold: 30
+          securityContext:
+            {{- include "flow.rustSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.matchmaker.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

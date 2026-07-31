@@ -1,0 +1,223 @@
+fullnameOverride: heterocloud-flow
+
+image:
+  repository: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow
+  tag: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+runtime:
+  hostNetwork: false
+
+secrets:
+  existingSecret: heterocloud-flow-secrets
+  create: false
+  values:
+    databaseUrl: ""
+    heterocloudProviderPublicKeysJson: ""
+    flowPrincipalContextHmacSecret: ""
+    livekitApiKey: ""
+    livekitApiSecret: ""
+    turnSharedSecret: ""
+
+providerAuth:
+  issuer: heterocloud
+  audience: heterocloud-flow
+  publicKeysSecretKey: heterocloud-provider-public-keys.json
+
+principalAuth:
+  issuer: heterocloud
+  audience: heterocloud-flow-data
+  maxTokenTtlSeconds: 300
+  contextSecretKey: flow-principal-context-hmac-secret
+
+database:
+  externalPort: 5432
+  maxConnections:
+    api: 20
+    matchmaker: 10
+    signaling: 20
+  migrateOnApiStart: false
+  migrationJob:
+    enabled: true
+
+api:
+  replicaCount: 3
+  publicUrls:
+    - https://flow-a.example.com
+    - https://flow-b.example.com
+    - https://flow-c.example.com
+  publicService:
+    enabled: false
+    port: 8080
+    annotations:
+      networking.heteronetwork.io/traffic-mode: forwarded
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+matchmaker:
+  replicaCount: 3
+  pollIntervalMs: 250
+  reservationTtlSeconds: 30
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+signaling:
+  replicaCount: 3
+  publicUrls:
+    - wss://flow-a.example.com
+    - wss://flow-b.example.com
+    - wss://flow-c.example.com
+  authTimeoutSeconds: 5
+  service:
+    port: 8082
+    targetPort: 8082
+  publicService:
+    enabled: false
+    port: 8082
+    annotations:
+      networking.heteronetwork.io/traffic-mode: forwarded
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+
+livekit:
+  replicaCount: 3
+  image:
+    repository: livekit/livekit-server
+    tag: v1.13.5
+    pullPolicy: IfNotPresent
+  internalUrl: http://heterocloud-flow-livekit:7880
+  publicUrls:
+    - wss://rtc-a.example.com
+    - wss://rtc-b.example.com
+    - wss://rtc-c.example.com
+  existingConfigSecret: ""
+  signal:
+    servicePort: 7880
+    publicService:
+      enabled: false
+      port: 7880
+      annotations:
+        networking.heteronetwork.io/traffic-mode: forwarded
+  rtc:
+    tcpPort: 7881
+    udpPort: 7882
+    annotations:
+      networking.heteronetwork.io/traffic-mode: direct
+  resources:
+    requests:
+      cpu: "2"
+      memory: 1Gi
+    limits:
+      cpu: "4"
+      memory: 4Gi
+
+coturn:
+  replicaCount: 3
+  image:
+    repository: coturn/coturn
+    tag: 4.16.0
+    pullPolicy: IfNotPresent
+  realm: turn.flow.example.com
+  publicHosts:
+    - turn-a.example.com
+    - turn-b.example.com
+    - turn-c.example.com
+  servicePort: 3478
+  relayPortMin: 49160
+  relayPortMax: 49260
+  credentialTtlSeconds: 300
+  annotations:
+    networking.heteronetwork.io/traffic-mode: direct
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+
+redis:
+  enabled: true
+  fullnameOverride: heterocloud-flow-redis
+  architecture: replication
+  auth:
+    enabled: false
+  sentinel:
+    enabled: true
+    masterSet: flowmaster
+    quorum: 2
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+    pdb:
+      create: true
+      minAvailable: 1
+  replica:
+    # In Bitnami Sentinel mode this is the total Redis/Sentinel pod count.
+    replicaCount: 3
+    podAntiAffinityPreset: hard
+    persistence:
+      enabled: true
+      size: 8Gi
+    pdb:
+      create: true
+      minAvailable: 2
+
+externalRedis:
+  address: ""
+  sentinelUrls: []
+  sentinelMaster: flowmaster
+  passwordSecretKey: ""
+  sentinelPasswordSecretKey: ""
+
+postgresql-ha:
+  enabled: false
+  fullnameOverride: heterocloud-flow-postgresql
+  postgresql:
+    replicaCount: 3
+    syncReplication: true
+    syncReplicationMode: ANY
+    pdb:
+      create: true
+      minAvailable: 2
+    persistence:
+      enabled: true
+      size: 20Gi
+  pgpool:
+    replicaCount: 2
+    pdb:
+      create: true
+      minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  externalEgressCidrs:
+    - 0.0.0.0/0
+    - ::/0
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+priorityClassName: ""

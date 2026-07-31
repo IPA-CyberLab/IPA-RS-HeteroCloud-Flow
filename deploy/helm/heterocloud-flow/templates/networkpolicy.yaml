@@ -1,0 +1,110 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow.fullname" . }}-default-deny
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow.fullname" . }}-control-plane
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, matchmaker, signaling, migration]
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 8081
+          protocol: TCP
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        - ipBlock:
+            cidr: ::/0
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 8082
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector: {}
+      ports:
+        - port: {{ $.Values.database.externalPort }}
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+        - port: 26379
+          protocol: TCP
+        - port: 7880
+          protocol: TCP
+    {{- range .Values.networkPolicy.externalEgressCidrs }}
+    - to:
+        - ipBlock:
+            cidr: {{ . }}
+      ports:
+        - port: {{ $.Values.database.externalPort }}
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+        - port: 26379
+          protocol: TCP
+    {{- end }}
+---
+# hostNetwork enforcement depends on the cluster CNI. These rules still apply
+# on CNIs that support host-network policy and document the intended boundary.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow.fullname" . }}-media-plane
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [livekit, coturn]
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        - ipBlock:
+            cidr: ::/0
+  egress:
+    - {}
+{{- end }}

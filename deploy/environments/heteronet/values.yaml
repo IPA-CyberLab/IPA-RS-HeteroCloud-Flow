@@ -1,0 +1,101 @@
+runtime:
+  hostNetwork: true
+
+# Flow-owned workloads stay on the three public-IP control-plane nodes. Redis
+# is a subchart and does not inherit this top-level selector.
+nodeSelector:
+  node-role.kubernetes.io/control-plane: ""
+
+secrets:
+  existingSecret: heterocloud-flow-secrets
+  create: false
+
+principalAuth:
+  issuer: heterocloud
+  audience: heterocloud-flow-data
+
+database:
+  # Every HeteroNet node exposes its local PostgreSQL HAProxy on loopback.
+  externalPort: 25432
+  maxConnections:
+    api: 8
+    matchmaker: 4
+    signaling: 6
+  # API pods use their local 127.0.0.1:25432 proxy and sqlx migration lock.
+  migrateOnApiStart: true
+  migrationJob:
+    enabled: false
+
+api:
+  replicaCount: 3
+  publicUrls:
+    - https://flow-a.163-220-236-51.sslip.io
+    - https://flow-b.163-220-236-52.sslip.io
+    - https://flow-c.163-220-236-53.sslip.io
+  # Per-node Caddy terminates TLS and health-checks all three VPN upstreams.
+  # Enable this separate plaintext L4 service only behind a trusted TLS tier
+  # that also blocks /internal/*.
+  publicService:
+    enabled: false
+    port: 8080
+    annotations:
+      networking.heteronetwork.io/traffic-mode: forwarded
+
+matchmaker:
+  replicaCount: 3
+
+signaling:
+  replicaCount: 3
+  publicUrls:
+    - wss://flow-a.163-220-236-51.sslip.io
+    - wss://flow-b.163-220-236-52.sslip.io
+    - wss://flow-c.163-220-236-53.sslip.io
+  publicService:
+    enabled: false
+
+livekit:
+  replicaCount: 3
+  publicUrls:
+    - wss://rtc-a.163-220-236-51.sslip.io
+    - wss://rtc-b.163-220-236-52.sslip.io
+    - wss://rtc-c.163-220-236-53.sslip.io
+  signal:
+    publicService:
+      enabled: false
+
+coturn:
+  replicaCount: 3
+  realm: heterocloud-flow
+  publicHosts:
+    - turn-a.163-220-236-51.sslip.io
+    - turn-b.163-220-236-52.sslip.io
+    - turn-c.163-220-236-53.sslip.io
+
+redis:
+  enabled: true
+  image:
+    tag: ""
+    digest: sha256:08863c2c3f4e051fb6139b38fa223e9c13be5033326a59bead182860d899bf98
+  sentinel:
+    image:
+      tag: ""
+      digest: sha256:ae75dd69c192a632bdeb21baa6721080be5b12347e52add922036398b47631da
+  master:
+    persistence:
+      enabled: false
+    pdb:
+      create: true
+      minAvailable: 1
+  replica:
+    # Sentinel mode uses this as the total node count: one primary and two
+    # replicas after election.
+    replicaCount: 3
+    podAntiAffinityPreset: hard
+    persistence:
+      enabled: false
+    pdb:
+      create: true
+      minAvailable: 2
+
+postgresql-ha:
+  enabled: false

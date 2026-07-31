@@ -1,0 +1,149 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flow.fullname" . }}-coturn
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coturn
+spec:
+  replicas: {{ .Values.coturn.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  selector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: coturn
+  template:
+    metadata:
+      labels:
+        {{- include "flow.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: coturn
+        networking.heteronetwork.io/traffic-mode: direct
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "flow.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      topologySpreadConstraints:
+        {{- include "flow.topologySpread" (dict "root" . "component" "coturn") | nindent 8 }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "flow.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: coturn
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: coturn
+          image: "{{ .Values.coturn.image.repository }}:{{ .Values.coturn.image.tag }}"
+          imagePullPolicy: {{ .Values.coturn.image.pullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - >-
+              exec turnserver
+              -n
+              --log-file=stdout
+              --pidfile=
+              --fingerprint
+              --use-auth-secret
+              --static-auth-secret="${TURN_SHARED_SECRET}"
+              --userdb=/tmp/turndb
+              --realm={{ .Values.coturn.realm }}
+              --listening-port={{ .Values.coturn.servicePort }}
+              --min-port={{ .Values.coturn.relayPortMin }}
+              --max-port={{ .Values.coturn.relayPortMax }}
+              --stale-nonce=600
+              --no-tls
+              --no-dtls
+              --no-auth-pings
+              --no-dynamic-ip-list
+              --no-dynamic-realms
+              --no-multicast-peers
+          env:
+            - name: TURN_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flow.secretName" . }}
+                  key: turn-shared-secret
+          ports:
+            - name: turn-tcp
+              containerPort: {{ .Values.coturn.servicePort }}
+              hostPort: {{ .Values.coturn.servicePort }}
+              protocol: TCP
+            - name: turn-udp
+              containerPort: {{ .Values.coturn.servicePort }}
+              hostPort: {{ .Values.coturn.servicePort }}
+              protocol: UDP
+          readinessProbe:
+            tcpSocket:
+              port: turn-tcp
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            tcpSocket:
+              port: turn-tcp
+            periodSeconds: 10
+            timeoutSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            {{- toYaml .Values.coturn.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flow.fullname" . }}-turn
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coturn
+  annotations:
+    {{- toYaml .Values.coturn.annotations | nindent 4 }}
+spec:
+  type: LoadBalancer
+  loadBalancerClass: heteronetwork.io/public
+  allocateLoadBalancerNodePorts: false
+  externalTrafficPolicy: Local
+  selector:
+    {{- include "flow.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: coturn
+  ports:
+    - name: turn-udp
+      port: {{ .Values.coturn.servicePort }}
+      targetPort: turn-udp
+      protocol: UDP
+    - name: turn-tcp
+      port: {{ .Values.coturn.servicePort }}
+      targetPort: turn-tcp
+      protocol: TCP

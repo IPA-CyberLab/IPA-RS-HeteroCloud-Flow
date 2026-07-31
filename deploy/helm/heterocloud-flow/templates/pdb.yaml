@@ -1,0 +1,26 @@
+{{- $components := list
+  (dict "name" "api" "replicas" .Values.api.replicaCount)
+  (dict "name" "matchmaker" "replicas" .Values.matchmaker.replicaCount)
+  (dict "name" "signaling" "replicas" .Values.signaling.replicaCount)
+  (dict "name" "livekit" "replicas" .Values.livekit.replicaCount)
+  (dict "name" "coturn" "replicas" .Values.coturn.replicaCount)
+-}}
+{{- range $index, $component := $components }}
+{{- if $index }}
+---
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "flow.fullname" $ }}-{{ $component.name }}
+  labels:
+    {{- include "flow.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component.name }}
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      {{- include "flow.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $component.name }}
+{{- end }}
+
