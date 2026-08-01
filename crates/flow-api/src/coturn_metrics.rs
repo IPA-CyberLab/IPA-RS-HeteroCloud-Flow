@@ -245,11 +245,11 @@ impl MetricsEndpoint {
         if u64::try_from(response.len()).unwrap_or(u64::MAX) > MAX_METRICS_BODY_BYTES {
             bail!("metrics response exceeded the size limit");
         }
-        Ok(parse_http_response(&response)?.to_owned())
+        parse_http_response(&response)
     }
 }
 
-fn parse_http_response(response: &[u8]) -> Result<&str> {
+fn parse_http_response(response: &[u8]) -> Result<String> {
     let header_end = response
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
@@ -266,15 +266,24 @@ fn parse_http_response(response: &[u8]) -> Result<&str> {
     }
 
     let mut content_length = None;
+    let mut transfer_encoding = None;
     for line in lines {
         let (name, value) = line
             .split_once(':')
             .context("metrics HTTP header is malformed")?;
         let name = name.trim();
         let value = value.trim();
-        if name.eq_ignore_ascii_case("transfer-encoding") && !value.eq_ignore_ascii_case("identity")
-        {
-            bail!("metrics chunked transfer encoding is unsupported");
+        if name.eq_ignore_ascii_case("transfer-encoding") {
+            if transfer_encoding.is_some() {
+                bail!("metrics response has duplicate Transfer-Encoding headers");
+            }
+            transfer_encoding = Some(if value.eq_ignore_ascii_case("identity") {
+                false
+            } else if value.eq_ignore_ascii_case("chunked") {
+                true
+            } else {
+                bail!("metrics transfer encoding is unsupported");
+            });
         }
         if name.eq_ignore_ascii_case("content-encoding") && !value.eq_ignore_ascii_case("identity")
         {
@@ -290,10 +299,75 @@ fn parse_http_response(response: &[u8]) -> Result<&str> {
         }
     }
     let body = &response[header_end + 4..];
+    if transfer_encoding == Some(true) {
+        if content_length.is_some() {
+            bail!("metrics response cannot use both chunked encoding and Content-Length");
+        }
+        return String::from_utf8(decode_chunked_body(body)?).context("metrics body is not UTF-8");
+    }
     if content_length.is_some_and(|expected| expected != body.len()) {
         bail!("metrics response body length does not match Content-Length");
     }
-    std::str::from_utf8(body).context("metrics body is not UTF-8")
+    Ok(std::str::from_utf8(body)
+        .context("metrics body is not UTF-8")?
+        .to_owned())
+}
+
+fn decode_chunked_body(mut body: &[u8]) -> Result<Vec<u8>> {
+    let mut decoded = Vec::new();
+    loop {
+        let line_end = body
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .context("metrics chunk size line is incomplete")?;
+        let size_line =
+            std::str::from_utf8(&body[..line_end]).context("metrics chunk size is not ASCII")?;
+        let size_text = size_line
+            .split_once(';')
+            .map_or(size_line, |(size, _)| size);
+        if size_text.is_empty() || !size_text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            bail!("metrics chunk size is invalid");
+        }
+        let size = usize::try_from(
+            u64::from_str_radix(size_text, 16).context("metrics chunk size is invalid")?,
+        )
+        .context("metrics chunk size is too large")?;
+        body = &body[line_end + 2..];
+
+        if size == 0 {
+            loop {
+                let trailer_end = body
+                    .windows(2)
+                    .position(|window| window == b"\r\n")
+                    .context("metrics chunk trailer is incomplete")?;
+                let trailer = &body[..trailer_end];
+                body = &body[trailer_end + 2..];
+                if trailer.is_empty() {
+                    if !body.is_empty() {
+                        bail!("metrics chunked body has trailing data");
+                    }
+                    return Ok(decoded);
+                }
+                let trailer =
+                    std::str::from_utf8(trailer).context("metrics chunk trailer is not UTF-8")?;
+                if !trailer.contains(':') {
+                    bail!("metrics chunk trailer is malformed");
+                }
+            }
+        }
+
+        let chunk_end = size
+            .checked_add(2)
+            .context("metrics chunk size overflowed")?;
+        if body.len() < chunk_end || &body[size..chunk_end] != b"\r\n" {
+            bail!("metrics chunk data is incomplete");
+        }
+        decoded.extend_from_slice(&body[..size]);
+        if u64::try_from(decoded.len()).unwrap_or(u64::MAX) > MAX_METRICS_BODY_BYTES {
+            bail!("metrics decoded body exceeded the size limit");
+        }
+        body = &body[chunk_end..];
+    }
 }
 
 fn parse_coturn_prometheus_metrics(body: &str, service_instance_id: Uuid) -> Result<CoturnMetrics> {
@@ -672,8 +746,22 @@ livekit_packet_bytes{{direction="outgoing",transmission="initial",country=""}} 4
     fn parses_strict_http_response() {
         let response = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ntest";
         assert_eq!(parse_http_response(response).unwrap(), "test");
+        let chunked = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\ntest\r\n6;ext=value\r\n body\n\r\n0\r\nX-Scrape: complete\r\n\r\n";
+        assert_eq!(parse_http_response(chunked).unwrap(), "test body\n");
         assert!(
             parse_http_response(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n").is_err()
+        );
+        assert!(
+            parse_http_response(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_http_response(
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\ntes\r\n0\r\n\r\n"
+            )
+            .is_err()
         );
     }
 
