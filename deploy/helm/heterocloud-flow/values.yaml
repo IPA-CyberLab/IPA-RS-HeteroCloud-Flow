@@ -103,8 +103,8 @@ signaling:
 livekit:
   replicaCount: 3
   image:
-    repository: livekit/livekit-server
-    tag: v1.13.5
+    repository: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-livekit
+    tag: "0.1.3"
     pullPolicy: IfNotPresent
   internalUrl: http://heterocloud-flow-livekit:7880
   publicUrls:
@@ -114,6 +114,7 @@ livekit:
   existingConfigSecret: ""
   metrics:
     port: 6789
+    urls: []
   signal:
     servicePort: 7880
     publicService:

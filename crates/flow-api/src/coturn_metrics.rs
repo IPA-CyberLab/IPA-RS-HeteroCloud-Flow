@@ -12,11 +12,12 @@ use uuid::Uuid;
 
 const MAX_METRICS_BODY_BYTES: u64 = 16 * 1024 * 1024;
 const SCRAPE_TIMEOUT: Duration = Duration::from_secs(2);
-const RELEVANT_METRICS: [&str; 3] = [
+const COTURN_RELEVANT_METRICS: [&str; 3] = [
     "turn_traffic_rcvb",
     "turn_traffic_sentb",
     "turn_total_allocations",
 ];
+const LIVEKIT_RELEVANT_METRICS: [&str; 1] = ["livekit_service_packet_bytes"];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CoturnMetrics {
@@ -55,20 +56,8 @@ pub struct CoturnMetricsClient {
 
 impl CoturnMetricsClient {
     pub fn new(urls: Vec<String>) -> Result<Self> {
-        let mut seen = BTreeSet::new();
-        let mut endpoints = Vec::with_capacity(urls.len());
-        for url in urls {
-            let endpoint = MetricsEndpoint::parse(&url)?;
-            if !seen.insert((endpoint.host.clone(), endpoint.port, endpoint.path.clone())) {
-                bail!("COTURN_METRICS_URLS contains a duplicate endpoint");
-            }
-            endpoints.push(endpoint);
-        }
-        if endpoints.len() > 16 {
-            bail!("COTURN_METRICS_URLS must contain at most 16 URLs");
-        }
         Ok(Self {
-            endpoints: Arc::new(endpoints),
+            endpoints: parse_endpoints(urls, "COTURN_METRICS_URLS")?,
         })
     }
 
@@ -79,7 +68,10 @@ impl CoturnMetricsClient {
         let mut tasks = tokio::task::JoinSet::new();
         for endpoint in self.endpoints.iter() {
             let endpoint = endpoint.clone();
-            tasks.spawn_blocking(move || endpoint.scrape(service_instance_id));
+            tasks.spawn_blocking(move || {
+                let body = endpoint.fetch()?;
+                parse_coturn_prometheus_metrics(&body, service_instance_id)
+            });
         }
 
         let mut total = CoturnMetrics::default();
@@ -92,6 +84,78 @@ impl CoturnMetricsClient {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LiveKitMetrics {
+    pub ingress_bytes: u64,
+    pub egress_bytes: u64,
+}
+
+impl LiveKitMetrics {
+    fn checked_add(self, other: Self) -> Result<Self> {
+        Ok(Self {
+            ingress_bytes: self
+                .ingress_bytes
+                .checked_add(other.ingress_bytes)
+                .context("LiveKit ingress byte count overflowed")?,
+            egress_bytes: self
+                .egress_bytes
+                .checked_add(other.egress_bytes)
+                .context("LiveKit egress byte count overflowed")?,
+        })
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct LiveKitMetricsClient {
+    endpoints: Arc<Vec<MetricsEndpoint>>,
+}
+
+impl LiveKitMetricsClient {
+    pub fn new(urls: Vec<String>) -> Result<Self> {
+        Ok(Self {
+            endpoints: parse_endpoints(urls, "LIVEKIT_METRICS_URLS")?,
+        })
+    }
+
+    pub async fn scrape(&self, service_instance_id: Uuid) -> Result<Option<LiveKitMetrics>> {
+        if self.endpoints.is_empty() {
+            return Ok(None);
+        }
+        let mut tasks = tokio::task::JoinSet::new();
+        for endpoint in self.endpoints.iter() {
+            let endpoint = endpoint.clone();
+            tasks.spawn_blocking(move || {
+                let body = endpoint.fetch()?;
+                parse_livekit_prometheus_metrics(&body, service_instance_id)
+            });
+        }
+
+        let mut total = LiveKitMetrics::default();
+        while let Some(result) = tasks.join_next().await {
+            let metrics =
+                result.map_err(|error| anyhow!("LiveKit metrics task failed: {error}"))??;
+            total = total.checked_add(metrics)?;
+        }
+        Ok(Some(total))
+    }
+}
+
+fn parse_endpoints(urls: Vec<String>, variable_name: &str) -> Result<Arc<Vec<MetricsEndpoint>>> {
+    let mut seen = BTreeSet::new();
+    let mut endpoints = Vec::with_capacity(urls.len());
+    for url in urls {
+        let endpoint = MetricsEndpoint::parse(&url)?;
+        if !seen.insert((endpoint.host.clone(), endpoint.port, endpoint.path.clone())) {
+            bail!("{variable_name} contains a duplicate endpoint");
+        }
+        endpoints.push(endpoint);
+    }
+    if endpoints.len() > 16 {
+        bail!("{variable_name} must contain at most 16 URLs");
+    }
+    Ok(Arc::new(endpoints))
+}
+
 #[derive(Clone)]
 struct MetricsEndpoint {
     host: String,
@@ -102,24 +166,24 @@ struct MetricsEndpoint {
 
 impl MetricsEndpoint {
     fn parse(value: &str) -> Result<Self> {
-        let url = Url::parse(value).context("coturn metrics URL cannot be parsed")?;
+        let url = Url::parse(value).context("metrics URL cannot be parsed")?;
         if url.scheme() != "http"
             || !url.username().is_empty()
             || url.password().is_some()
             || url.query().is_some()
             || url.fragment().is_some()
         {
-            bail!("coturn metrics URL must be an http URL without credentials or query data");
+            bail!("metrics URL must be an http URL without credentials or query data");
         }
         let host = url
             .host_str()
             .filter(|host| !host.is_empty())
-            .context("coturn metrics URL host is required")?
+            .context("metrics URL host is required")?
             .to_owned();
         let port = url
             .port_or_known_default()
-            .context("coturn metrics URL port is required")?;
-        let rendered_host = match url.host().context("coturn metrics URL host is required")? {
+            .context("metrics URL port is required")?;
+        let rendered_host = match url.host().context("metrics URL host is required")? {
             Host::Ipv6(address) => format!("[{address}]"),
             other => other.to_string(),
         };
@@ -140,10 +204,10 @@ impl MetricsEndpoint {
         })
     }
 
-    fn scrape(&self, service_instance_id: Uuid) -> Result<CoturnMetrics> {
+    fn fetch(&self) -> Result<String> {
         let addresses = (self.host.as_str(), self.port)
             .to_socket_addrs()
-            .with_context(|| format!("resolve coturn metrics at {}", self.host_header))?;
+            .with_context(|| format!("resolve metrics at {}", self.host_header))?;
         let deadline = Instant::now() + SCRAPE_TIMEOUT;
         let mut last_error = None;
         let mut stream = None;
@@ -161,8 +225,8 @@ impl MetricsEndpoint {
         }
         let mut stream = stream.ok_or_else(|| {
             last_error.map_or_else(
-                || anyhow!("coturn metrics endpoint resolved no addresses"),
-                |error| anyhow!("connect to coturn metrics at {}: {error}", self.host_header),
+                || anyhow!("metrics endpoint resolved no addresses"),
+                |error| anyhow!("connect to metrics at {}: {error}", self.host_header),
             )
         })?;
         stream.set_read_timeout(Some(SCRAPE_TIMEOUT))?;
@@ -179,10 +243,9 @@ impl MetricsEndpoint {
             .take(MAX_METRICS_BODY_BYTES + 1)
             .read_to_end(&mut response)?;
         if u64::try_from(response.len()).unwrap_or(u64::MAX) > MAX_METRICS_BODY_BYTES {
-            bail!("coturn metrics response exceeded the size limit");
+            bail!("metrics response exceeded the size limit");
         }
-        let body = parse_http_response(&response)?;
-        parse_prometheus_metrics(body, service_instance_id)
+        Ok(parse_http_response(&response)?.to_owned())
     }
 }
 
@@ -190,52 +253,50 @@ fn parse_http_response(response: &[u8]) -> Result<&str> {
     let header_end = response
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
-        .context("coturn metrics HTTP headers are incomplete")?;
+        .context("metrics HTTP headers are incomplete")?;
     let headers = std::str::from_utf8(&response[..header_end])
-        .context("coturn metrics HTTP headers are not UTF-8")?;
+        .context("metrics HTTP headers are not UTF-8")?;
     let mut lines = headers.split("\r\n");
-    let status = lines
-        .next()
-        .context("coturn metrics HTTP status is missing")?;
+    let status = lines.next().context("metrics HTTP status is missing")?;
     let mut status_parts = status.split_ascii_whitespace();
     let version = status_parts.next().unwrap_or_default();
     let code = status_parts.next().unwrap_or_default();
     if !matches!(version, "HTTP/1.0" | "HTTP/1.1") || code != "200" {
-        bail!("coturn metrics endpoint returned non-200 HTTP status");
+        bail!("metrics endpoint returned non-200 HTTP status");
     }
 
     let mut content_length = None;
     for line in lines {
         let (name, value) = line
             .split_once(':')
-            .context("coturn metrics HTTP header is malformed")?;
+            .context("metrics HTTP header is malformed")?;
         let name = name.trim();
         let value = value.trim();
         if name.eq_ignore_ascii_case("transfer-encoding") && !value.eq_ignore_ascii_case("identity")
         {
-            bail!("coturn metrics chunked transfer encoding is unsupported");
+            bail!("metrics chunked transfer encoding is unsupported");
         }
         if name.eq_ignore_ascii_case("content-encoding") && !value.eq_ignore_ascii_case("identity")
         {
-            bail!("coturn metrics content encoding is unsupported");
+            bail!("metrics content encoding is unsupported");
         }
         if name.eq_ignore_ascii_case("content-length") {
             let parsed = value
                 .parse::<usize>()
-                .context("coturn metrics Content-Length is invalid")?;
+                .context("metrics Content-Length is invalid")?;
             if content_length.replace(parsed).is_some() {
-                bail!("coturn metrics response has duplicate Content-Length headers");
+                bail!("metrics response has duplicate Content-Length headers");
             }
         }
     }
     let body = &response[header_end + 4..];
     if content_length.is_some_and(|expected| expected != body.len()) {
-        bail!("coturn metrics response body length does not match Content-Length");
+        bail!("metrics response body length does not match Content-Length");
     }
-    std::str::from_utf8(body).context("coturn metrics body is not UTF-8")
+    std::str::from_utf8(body).context("metrics body is not UTF-8")
 }
 
-fn parse_prometheus_metrics(body: &str, service_instance_id: Uuid) -> Result<CoturnMetrics> {
+fn parse_coturn_prometheus_metrics(body: &str, service_instance_id: Uuid) -> Result<CoturnMetrics> {
     let service_id = service_instance_id.to_string();
     let mut metrics = CoturnMetrics::default();
     let mut scoped_allocations_seen = false;
@@ -245,7 +306,7 @@ fn parse_prometheus_metrics(body: &str, service_instance_id: Uuid) -> Result<Cot
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let Some(sample) = parse_relevant_sample(line)
+        let Some(sample) = parse_relevant_sample(line, &COTURN_RELEVANT_METRICS)
             .with_context(|| format!("invalid Prometheus sample on line {}", index + 1))?
         else {
             continue;
@@ -296,18 +357,66 @@ fn parse_prometheus_metrics(body: &str, service_instance_id: Uuid) -> Result<Cot
     Ok(metrics)
 }
 
+fn parse_livekit_prometheus_metrics(
+    body: &str,
+    service_instance_id: Uuid,
+) -> Result<LiveKitMetrics> {
+    let service_id = service_instance_id.to_string();
+    let mut metrics = LiveKitMetrics::default();
+
+    for (index, raw_line) in body.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some(sample) = parse_relevant_sample(line, &LIVEKIT_RELEVANT_METRICS)
+            .with_context(|| format!("invalid Prometheus sample on line {}", index + 1))?
+        else {
+            continue;
+        };
+        if sample.labels.get("service_id") != Some(&service_id) {
+            continue;
+        }
+        if !matches!(
+            sample.labels.get("transmission").map(String::as_str),
+            Some("initial" | "retransmit")
+        ) {
+            bail!("LiveKit service byte sample has an invalid transmission label");
+        }
+        match sample.labels.get("direction").map(String::as_str) {
+            Some("incoming") => {
+                metrics.ingress_bytes = metrics
+                    .ingress_bytes
+                    .checked_add(sample.value)
+                    .context("LiveKit ingress byte count overflowed")?;
+            }
+            Some("outgoing") => {
+                metrics.egress_bytes = metrics
+                    .egress_bytes
+                    .checked_add(sample.value)
+                    .context("LiveKit egress byte count overflowed")?;
+            }
+            _ => bail!("LiveKit service byte sample has an invalid direction label"),
+        }
+    }
+    Ok(metrics)
+}
+
 struct Sample<'a> {
     name: &'a str,
     labels: BTreeMap<String, String>,
     value: u64,
 }
 
-fn parse_relevant_sample(line: &str) -> Result<Option<Sample<'_>>> {
+fn parse_relevant_sample<'a>(
+    line: &'a str,
+    relevant_metrics: &[&str],
+) -> Result<Option<Sample<'a>>> {
     let name_end = line
         .find(|character: char| character == '{' || character.is_ascii_whitespace())
         .unwrap_or(line.len());
     let name = &line[..name_end];
-    if !RELEVANT_METRICS.contains(&name) {
+    if !relevant_metrics.contains(&name) {
         return Ok(None);
     }
     let mut remainder = &line[name_end..];
@@ -476,8 +585,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        CoturnMetricsClient, parse_http_response, parse_nonnegative_integer,
-        parse_prometheus_metrics,
+        CoturnMetricsClient, LiveKitMetricsClient, parse_coturn_prometheus_metrics,
+        parse_http_response, parse_livekit_prometheus_metrics, parse_nonnegative_integer,
     };
 
     #[test]
@@ -497,7 +606,7 @@ turn_total_allocations{{type="UDP"}} 7
 turn_total_allocations{{type="UDP",user="123:{organization_id}:{project_id}:{service_id}:{principal_id}"}} 2
 "#
         );
-        let metrics = parse_prometheus_metrics(&body, service_id).unwrap();
+        let metrics = parse_coturn_prometheus_metrics(&body, service_id).unwrap();
         assert_eq!(metrics.ingress_bytes, 120);
         assert_eq!(metrics.egress_bytes, 80);
         assert_eq!(metrics.allocations, Some(2));
@@ -509,8 +618,50 @@ turn_total_allocations{{type="UDP",user="123:{organization_id}:{project_id}:{ser
         assert!(parse_nonnegative_integer("NaN").is_err());
         let service_id = Uuid::new_v4();
         assert!(
-            parse_prometheus_metrics(
+            parse_coturn_prometheus_metrics(
                 &format!("turn_traffic_rcvb{{user=\"123:{service_id}\",user=\"duplicate\"}} 1\n"),
+                service_id,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_service_scoped_livekit_metrics_without_global_misattribution() {
+        let service_id = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let body = format!(
+            r#"
+# HELP livekit_service_packet_bytes Media bytes attributed to a HeteroCloud Flow service.
+livekit_service_packet_bytes{{direction="incoming",node_id="node-a",node_type="SERVER",service_id="{service_id}",transmission="initial"}} 120
+livekit_service_packet_bytes{{direction="incoming",node_id="node-a",node_type="SERVER",service_id="{service_id}",transmission="retransmit"}} 5
+livekit_service_packet_bytes{{direction="outgoing",node_id="node-a",node_type="SERVER",service_id="{service_id}",transmission="initial"}} 8e1
+livekit_service_packet_bytes{{direction="outgoing",node_id="node-a",node_type="SERVER",service_id="{other}",transmission="initial"}} 999
+livekit_packet_bytes{{direction="outgoing",transmission="initial",country=""}} 4567
+"#
+        );
+        let metrics = parse_livekit_prometheus_metrics(&body, service_id).unwrap();
+        assert_eq!(metrics.ingress_bytes, 125);
+        assert_eq!(metrics.egress_bytes, 80);
+    }
+
+    #[test]
+    fn rejects_invalid_matching_livekit_labels() {
+        let service_id = Uuid::new_v4();
+        assert!(
+            parse_livekit_prometheus_metrics(
+                &format!(
+                    "livekit_service_packet_bytes{{service_id=\"{service_id}\",direction=\"sideways\",transmission=\"initial\"}} 1\n"
+                ),
+                service_id,
+            )
+            .is_err()
+        );
+        assert!(
+            parse_livekit_prometheus_metrics(
+                &format!(
+                    "livekit_service_packet_bytes{{service_id=\"{service_id}\",direction=\"incoming\",transmission=\"duplicate\"}} 1\n"
+                ),
                 service_id,
             )
             .is_err()
@@ -569,6 +720,13 @@ turn_total_allocations{{type="UDP",user="123:{organization_id}:{project_id}:{ser
         assert_eq!(metrics.ingress_bytes, 5712);
         assert_eq!(metrics.egress_bytes, 3112);
         assert!(CoturnMetricsClient::new(vec![url.clone(), url]).is_err());
+        assert!(
+            LiveKitMetricsClient::new(vec![
+                format!("http://{address}/metrics"),
+                format!("http://{address}/metrics"),
+            ])
+            .is_err()
+        );
         server.join().unwrap();
     }
 }

@@ -55,6 +55,9 @@ signaling:
 
 livekit:
   replicaCount: 3
+  image:
+    repository: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-livekit
+    tag: "0.1.3"
   publicUrls:
     - wss://rtc-a.heterocloud.mizuame.app
     - wss://rtc-b.heterocloud.mizuame.app
@@ -62,6 +65,11 @@ livekit:
   signal:
     publicService:
       enabled: false
+  metrics:
+    urls:
+      - http://10.250.0.4:6789/metrics
+      - http://10.250.0.5:6789/metrics
+      - http://10.250.0.6:6789/metrics
   rtc:
     annotations:
       networking.heteronetwork.io/ingress-replicas: "3"

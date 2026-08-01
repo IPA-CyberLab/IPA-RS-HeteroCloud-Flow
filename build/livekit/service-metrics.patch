@@ -1,0 +1,162 @@
+diff --git a/pkg/telemetry/prometheus/packets.go b/pkg/telemetry/prometheus/packets.go
+index 6ca9ce4..9286f8b 100644
+--- a/pkg/telemetry/prometheus/packets.go
++++ b/pkg/telemetry/prometheus/packets.go
+@@ -54,6 +54,7 @@ var (
+ 	promPacketLabels          = []string{"direction", "transmission", "country"}
+ 	promPacketTotal           *prometheus.CounterVec
+ 	promPacketBytes           *prometheus.CounterVec
++	promServicePacketBytes    *prometheus.CounterVec
+ 	promRTCPLabels            = []string{"direction", "country"}
+ 	promStreamLabels          = []string{"direction", "source", "type", "country"}
+ 	promNackTotal             *prometheus.CounterVec
+@@ -85,6 +86,13 @@ func initPacketStats(nodeID string, nodeType livekit.NodeType) {
+ 		Name:        "bytes",
+ 		ConstLabels: prometheus.Labels{"node_id": nodeID, "node_type": nodeType.String()},
+ 	}, promPacketLabels)
++	promServicePacketBytes = prometheus.NewCounterVec(prometheus.CounterOpts{
++		Namespace:   livekitNamespace,
++		Subsystem:   "service_packet",
++		Name:        "bytes",
++		Help:        "Media bytes attributed to a HeteroCloud Flow service.",
++		ConstLabels: prometheus.Labels{"node_id": nodeID, "node_type": nodeType.String()},
++	}, []string{"service_id", "direction", "transmission"})
+ 	promNackTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+ 		Namespace:   livekitNamespace,
+ 		Subsystem:   "nack",
+@@ -190,6 +198,7 @@ func initPacketStats(nodeID string, nodeType livekit.NodeType) {
+ 
+ 	prometheus.MustRegister(promPacketTotal)
+ 	prometheus.MustRegister(promPacketBytes)
++	prometheus.MustRegister(promServicePacketBytes)
+ 	prometheus.MustRegister(promNackTotal)
+ 	prometheus.MustRegister(promPliTotal)
+ 	prometheus.MustRegister(promFirTotal)
+@@ -244,6 +253,17 @@ func IncrementBytes(country string, direction Direction, count uint64, retransmi
+ 	}
+ }
+ 
++func IncrementServiceBytes(serviceID string, direction Direction, count uint64, retransmit bool) {
++	if serviceID == "" || count == 0 {
++		return
++	}
++	transmission := TransmissionInitial
++	if retransmit {
++		transmission = TransmissionRetransmit
++	}
++	promServicePacketBytes.WithLabelValues(serviceID, string(direction), string(transmission)).Add(float64(count))
++}
++
+ func IncrementRTCP(country string, direction Direction, nack, pli, fir uint32) {
+ 	if nack > 0 {
+ 		promNackTotal.WithLabelValues(string(direction), country).Add(float64(nack))
+diff --git a/pkg/telemetry/stats.go b/pkg/telemetry/stats.go
+index 56dc530..9929208 100644
+--- a/pkg/telemetry/stats.go
++++ b/pkg/telemetry/stats.go
+@@ -62,8 +62,9 @@ func StatsKeyForData(
+ 	}
+ }
+ 
+-func (t *telemetryService) TrackStats(roomID livekit.RoomID, _roomName livekit.RoomName, key StatsKey, stat *livekit.AnalyticsStat) {
++func (t *telemetryService) TrackStats(roomID livekit.RoomID, roomName livekit.RoomName, key StatsKey, stat *livekit.AnalyticsStat) {
+ 	t.enqueue(func() {
++		serviceID := flowServiceIDFromRoomName(roomName)
+ 		direction := prometheus.Incoming
+ 		if key.streamType == livekit.StreamType_DOWNSTREAM {
+ 			direction = prometheus.Outgoing
+@@ -100,11 +101,13 @@ func (t *telemetryService) TrackStats(roomID livekit.RoomID, _roomName livekit.R
+ 		prometheus.IncrementRTCP(key.country, direction, nacks, plis, firs)
+ 		prometheus.IncrementPackets(key.country, direction, uint64(packets), false)
+ 		prometheus.IncrementBytes(key.country, direction, bytes, false)
++		prometheus.IncrementServiceBytes(serviceID, direction, bytes, false)
+ 		if retransmitPackets != 0 {
+ 			prometheus.IncrementPackets(key.country, direction, uint64(retransmitPackets), true)
+ 		}
+ 		if retransmitBytes != 0 {
+ 			prometheus.IncrementBytes(key.country, direction, retransmitBytes, true)
++			prometheus.IncrementServiceBytes(serviceID, direction, retransmitBytes, true)
+ 		}
+ 
+ 		if worker, ok := t.getWorker(roomID, key.participantID); ok {
+@@ -112,3 +115,37 @@ func (t *telemetryService) TrackStats(roomID livekit.RoomID, _roomName livekit.R
+ 		}
+ 	})
+ }
++
++func flowServiceIDFromRoomName(roomName livekit.RoomName) string {
++	const prefix = "flow-"
++	const uuidLength = 36
++	value := string(roomName)
++	if len(value) != len(prefix)+uuidLength+1+uuidLength || value[:len(prefix)] != prefix {
++		return ""
++	}
++	serviceID := value[len(prefix) : len(prefix)+uuidLength]
++	roomID := value[len(prefix)+uuidLength+1:]
++	if value[len(prefix)+uuidLength] != '-' || !isUUIDText(serviceID) || !isUUIDText(roomID) {
++		return ""
++	}
++	return serviceID
++}
++
++func isUUIDText(value string) bool {
++	if len(value) != 36 {
++		return false
++	}
++	for index := range value {
++		if index == 8 || index == 13 || index == 18 || index == 23 {
++			if value[index] != '-' {
++				return false
++			}
++			continue
++		}
++		character := value[index]
++		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
++			return false
++		}
++	}
++	return true
++}
+diff --git a/pkg/telemetry/flow_service_test.go b/pkg/telemetry/flow_service_test.go
+new file mode 100644
+index 0000000..1ffde48
+--- /dev/null
++++ b/pkg/telemetry/flow_service_test.go
+@@ -0,0 +1,37 @@
++// Copyright 2026 IPA-CyberLab
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package telemetry
++
++import (
++	"testing"
++
++	"github.com/livekit/protocol/livekit"
++	"github.com/stretchr/testify/require"
++)
++
++func TestFlowServiceIDFromRoomName(t *testing.T) {
++	serviceID := "019fbdfa-4920-70e0-899d-c5bed06903a0"
++	roomID := "019fbdfc-9891-7dc3-a57b-83637604d1dd"
++	require.Equal(t, serviceID, flowServiceIDFromRoomName(livekit.RoomName("flow-"+serviceID+"-"+roomID)))
++
++	for _, roomName := range []string{
++		"flow-" + roomID,
++		"flow-" + serviceID + "-not-a-uuid",
++		"flow-019FBDFA-4920-70E0-899D-C5BED06903A0-" + roomID,
++		"customer-room",
++	} {
++		require.Empty(t, flowServiceIDFromRoomName(livekit.RoomName(roomName)))
++	}
++}

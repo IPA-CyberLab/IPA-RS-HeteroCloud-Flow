@@ -124,6 +124,8 @@ spec:
               value: {{ .Values.coturn.credentialTtlSeconds | quote }}
             - name: COTURN_METRICS_URLS
               value: {{ join "," .Values.coturn.metrics.urls | quote }}
+            - name: LIVEKIT_METRICS_URLS
+              value: {{ join "," .Values.livekit.metrics.urls | quote }}
             - name: RUST_LOG
               value: info
           readinessProbe:

@@ -167,9 +167,15 @@
         },
         "metrics": {
           "type": "object",
-          "required": ["port"],
+          "required": ["port", "urls"],
           "properties": {
-            "port": {"type": "integer", "minimum": 1024, "maximum": 65535}
+            "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
+            "urls": {
+              "type": "array",
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^http://"}
+            }
           }
         }
       }

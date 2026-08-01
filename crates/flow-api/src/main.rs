@@ -45,6 +45,7 @@ async fn run() -> Result<()> {
         provider_auth: config.provider_authenticator,
         livekit: config.livekit,
         coturn_metrics: config.coturn_metrics,
+        livekit_metrics: config.livekit_metrics,
         api_urls: config.api_urls,
         livekit_ws_urls: config.livekit_ws_urls,
         signaling_urls: config.signaling_urls,

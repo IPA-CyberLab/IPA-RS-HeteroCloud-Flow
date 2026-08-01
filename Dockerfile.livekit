@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1.7
+FROM golang:1.26-alpine AS source
+
+ARG LIVEKIT_COMMIT=3b9f118327b257301083a7c4aa46076c8012918a
+RUN apk add --no-cache git
+WORKDIR /source
+RUN git clone --filter=blob:none https://github.com/livekit/livekit.git . && \
+    git checkout --detach "${LIVEKIT_COMMIT}" && \
+    test "$(git rev-parse HEAD)" = "${LIVEKIT_COMMIT}"
+
+COPY build/livekit/service-metrics.patch /tmp/service-metrics.patch
+RUN git apply --check /tmp/service-metrics.patch && \
+    git apply /tmp/service-metrics.patch && \
+    go test ./pkg/telemetry ./pkg/telemetry/prometheus
+
+FROM source AS builder
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" go build -a -o /livekit-server ./cmd/server
+
+FROM alpine:3.23
+RUN apk add --no-cache ca-certificates
+COPY --from=source /source/LICENSE /licenses/livekit/LICENSE
+COPY --from=source /source/NOTICE /licenses/livekit/NOTICE
+COPY --from=builder /livekit-server /livekit-server
+USER 65532:65532
+EXPOSE 6789 7880 7881 7882/tcp 7882/udp
+ENTRYPOINT ["/livekit-server"]

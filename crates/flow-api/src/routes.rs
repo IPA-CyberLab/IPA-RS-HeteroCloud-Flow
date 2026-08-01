@@ -23,7 +23,7 @@ use tower_http::trace::TraceLayer;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::coturn_metrics::CoturnMetricsClient;
+use crate::coturn_metrics::{CoturnMetricsClient, LiveKitMetricsClient};
 use crate::error::ApiError;
 
 const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
@@ -36,6 +36,7 @@ pub struct AppState {
     pub provider_auth: ProviderAuthenticator,
     pub livekit: LiveKitClient,
     pub coturn_metrics: CoturnMetricsClient,
+    pub livekit_metrics: LiveKitMetricsClient,
     pub api_urls: Vec<String>,
     pub livekit_ws_urls: Vec<String>,
     pub signaling_urls: Vec<String>,
@@ -90,12 +91,15 @@ async fn service_overview(
             SIGNALING_CONNECTION_STALE_AFTER,
         )
         .await?;
-    let (livekit_result, coturn_result) = tokio::join!(
+    let (livekit_result, coturn_result, livekit_metrics_result) = tokio::join!(
         state
             .livekit
             .participant_count(&snapshot.provider_room_names),
         state
             .coturn_metrics
+            .scrape(context.principal.service_instance_id),
+        state
+            .livekit_metrics
             .scrape(context.principal.service_instance_id),
     );
     let sfu_participants =
@@ -126,6 +130,28 @@ async fn service_overview(
                 %error,
                 service_instance_id = %context.principal.service_instance_id,
                 "coturn metrics scrape failed; returning database usage only"
+            );
+        }
+    }
+    match livekit_metrics_result {
+        Ok(Some(metrics)) => {
+            let measured_ingress = i64::try_from(metrics.ingress_bytes)
+                .map_err(|_| ApiError::internal("LiveKit ingress byte count exceeded i64"))?;
+            let measured_egress = i64::try_from(metrics.egress_bytes)
+                .map_err(|_| ApiError::internal("LiveKit egress byte count exceeded i64"))?;
+            ingress_bytes = ingress_bytes
+                .checked_add(measured_ingress)
+                .ok_or_else(|| ApiError::internal("ingress byte count overflowed"))?;
+            egress_bytes = egress_bytes
+                .checked_add(measured_egress)
+                .ok_or_else(|| ApiError::internal("egress byte count overflowed"))?;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            warn!(
+                %error,
+                service_instance_id = %context.principal.service_instance_id,
+                "LiveKit metrics scrape failed; returning other usage measurements"
             );
         }
     }
@@ -398,7 +424,8 @@ async fn create_room(
     context.require("flow.room.create")?;
     let id = Uuid::now_v7();
     let room_name = request.name.unwrap_or_else(|| format!("room-{id}"));
-    let provider_room_name = (request.mode == SessionMode::Sfu).then(|| format!("flow-{id}"));
+    let provider_room_name = (request.mode == SessionMode::Sfu)
+        .then(|| livekit_room_name(context.principal.service_instance_id, id));
     let new_room = NewRoom {
         id,
         organization_id: context.principal.organization_id,
@@ -847,6 +874,10 @@ fn signaling_room_urls(base_urls: &[String], room_id: Uuid) -> Vec<String> {
         .collect()
 }
 
+fn livekit_room_name(service_instance_id: Uuid, room_id: Uuid) -> String {
+    format!("flow-{service_instance_id}-{room_id}")
+}
+
 const fn default_max_participants() -> i32 {
     16
 }
@@ -877,9 +908,9 @@ mod tests {
 
     use super::{
         AppState, RequestContext, RoomConnection, ServiceEndpoints, ServiceOverviewResponse,
-        router, signaling_room_urls,
+        livekit_room_name, router, signaling_room_urls,
     };
-    use crate::coturn_metrics::CoturnMetricsClient;
+    use crate::coturn_metrics::{CoturnMetricsClient, LiveKitMetricsClient};
 
     const PRIVATE_KEY: &[u8] = br"-----BEGIN PRIVATE KEY-----
 MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
@@ -914,6 +945,16 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
                 format!("wss://flow-b.example.test/v1/signal/{room_id}"),
                 format!("wss://flow-c.example.test/v1/signal/{room_id}"),
             ]
+        );
+    }
+
+    #[test]
+    fn scopes_livekit_room_name_to_service_instance() {
+        let service_instance_id = Uuid::parse_str("019fbdfa-4920-70e0-899d-c5bed06903a0").unwrap();
+        let room_id = Uuid::parse_str("019fbdfc-9891-7dc3-a57b-83637604d1dd").unwrap();
+        assert_eq!(
+            livekit_room_name(service_instance_id, room_id),
+            "flow-019fbdfa-4920-70e0-899d-c5bed06903a0-019fbdfc-9891-7dc3-a57b-83637604d1dd"
         );
     }
 
@@ -1172,6 +1213,7 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
             )
             .unwrap(),
             coturn_metrics: CoturnMetricsClient::default(),
+            livekit_metrics: LiveKitMetricsClient::default(),
             api_urls: vec![
                 "https://flow-a.example.test".into(),
                 "https://flow-b.example.test".into(),

@@ -6,7 +6,7 @@ use flow_livekit::LiveKitClient;
 use flow_turn::TurnCredentialIssuer;
 use url::Url;
 
-use crate::coturn_metrics::CoturnMetricsClient;
+use crate::coturn_metrics::{CoturnMetricsClient, LiveKitMetricsClient};
 
 pub struct Config {
     pub bind_addr: SocketAddr,
@@ -17,6 +17,7 @@ pub struct Config {
     pub provider_authenticator: ProviderAuthenticator,
     pub livekit: LiveKitClient,
     pub coturn_metrics: CoturnMetricsClient,
+    pub livekit_metrics: LiveKitMetricsClient,
     pub api_urls: Vec<String>,
     pub livekit_ws_urls: Vec<String>,
     pub signaling_urls: Vec<String>,
@@ -83,6 +84,9 @@ impl Config {
         let coturn_metrics_urls = optional_url_list("COTURN_METRICS_URLS")?;
         let coturn_metrics = CoturnMetricsClient::new(coturn_metrics_urls)
             .context("COTURN_METRICS_URLS is invalid")?;
+        let livekit_metrics_urls = optional_url_list("LIVEKIT_METRICS_URLS")?;
+        let livekit_metrics = LiveKitMetricsClient::new(livekit_metrics_urls)
+            .context("LIVEKIT_METRICS_URLS is invalid")?;
 
         Ok(Self {
             bind_addr,
@@ -93,6 +97,7 @@ impl Config {
             provider_authenticator,
             livekit,
             coturn_metrics,
+            livekit_metrics,
             api_urls,
             livekit_ws_urls,
             signaling_urls,

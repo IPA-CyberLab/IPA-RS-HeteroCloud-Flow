@@ -67,6 +67,8 @@ spec:
           protocol: TCP
         - port: 7880
           protocol: TCP
+        - port: {{ $.Values.livekit.metrics.port }}
+          protocol: TCP
         - port: {{ $.Values.coturn.metrics.port }}
           protocol: TCP
     {{- range .Values.networkPolicy.externalEgressCidrs }}
@@ -79,6 +81,8 @@ spec:
         - port: 6379
           protocol: TCP
         - port: 26379
+          protocol: TCP
+        - port: {{ $.Values.livekit.metrics.port }}
           protocol: TCP
         - port: {{ $.Values.coturn.metrics.port }}
           protocol: TCP
