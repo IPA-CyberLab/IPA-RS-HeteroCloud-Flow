@@ -104,6 +104,15 @@ redis:
     # replicas after election.
     replicaCount: 3
     podAntiAffinityPreset: hard
+    # Flow's Redis quorum is part of the control data plane. Keep it on the
+    # three always-on control-plane nodes so transient edge/worker loss cannot
+    # take LiveKit and signaling down with it.
+    nodeSelector:
+      node-role.kubernetes.io/control-plane: ""
+    tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
     persistence:
       enabled: false
     pdb:
