@@ -16,7 +16,7 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/IPA-CyberLab/IPA-RS-HeteroCloud-Flow"
 rust-version = "1.96"
-version = "0.1.3"
+version = "0.1.4"
 
 [workspace.dependencies]
 anyhow = "1.0.102"

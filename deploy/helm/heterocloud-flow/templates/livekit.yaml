@@ -33,6 +33,11 @@ spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       topologySpreadConstraints:
@@ -132,14 +137,14 @@ spec:
             items:
               - key: livekit-keys.yaml
                 path: livekit-keys.yaml
-            defaultMode: 0400
+            defaultMode: 0440
         - name: turn-secret
           secret:
             secretName: {{ include "flow.secretName" . }}
             items:
               - key: turn-shared-secret
                 path: turn-shared-secret
-            defaultMode: 0400
+            defaultMode: 0440
         - name: tmp
           emptyDir: {}
       {{- with .Values.nodeSelector }}
