@@ -5,7 +5,7 @@ use flow_domain::{
     FlowRoom, MatchAssignment, MatchCandidate, MatchmakingTicket, NewAuditEvent, NewRoom,
     NewSignalingConnection, NewTicket, NewUsageEvent, ReconcileOutcome, RoomState,
     ServiceInstanceDelete, ServiceInstanceReconcile, ServiceInstanceStatus, SessionMode,
-    TicketState, ValidationError,
+    TicketState, ValidationError, room_limit_from_spec,
 };
 use serde_json::Value;
 use sqlx::{
@@ -25,6 +25,7 @@ pub struct PgStore {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceOverviewSnapshot {
     pub active_rooms: u64,
+    pub room_limit: u32,
     pub p2p_connections: u64,
     pub ingress_bytes: i64,
     pub egress_bytes: i64,
@@ -536,6 +537,22 @@ impl PgStore {
         service_instance_id: Uuid,
         signaling_stale_after: Duration,
     ) -> Result<ServiceOverviewSnapshot, StoreError> {
+        let desired_spec: Value = sqlx::query_scalar(
+            r"
+            SELECT desired_spec
+            FROM flow_service_instances
+            WHERE id = $1
+              AND organization_id = $2
+              AND project_id = $3
+            ",
+        )
+        .bind(service_instance_id)
+        .bind(organization_id)
+        .bind(project_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(StoreError::NotFound)?;
+        let room_limit = room_limit_from_spec(&desired_spec)?;
         let active_rooms: i64 = sqlx::query_scalar(
             r"
             SELECT count(*)
@@ -608,6 +625,7 @@ impl PgStore {
         Ok(ServiceOverviewSnapshot {
             active_rooms: u64::try_from(active_rooms)
                 .map_err(|_| StoreError::CorruptData("active room count"))?,
+            room_limit,
             p2p_connections: u64::try_from(p2p_connections)
                 .map_err(|_| StoreError::CorruptData("P2P connection count"))?,
             ingress_bytes,
@@ -843,8 +861,60 @@ impl PgStore {
 
     pub async fn create_room(&self, room: NewRoom) -> Result<FlowRoom, StoreError> {
         room.validate()?;
-        let row = insert_room(&self.pool, room).await?;
+        let mut transaction = self.pool.begin().await?;
+        advisory_lock(
+            &mut transaction,
+            &format!("service-instance:{}", room.service_instance_id),
+        )
+        .await?;
+        let (room_limit, active_rooms) = service_room_capacity(
+            &mut transaction,
+            room.organization_id,
+            room.project_id,
+            room.service_instance_id,
+        )
+        .await?;
+        if active_rooms >= u64::from(room_limit) {
+            return Err(StoreError::RoomLimitExceeded { limit: room_limit });
+        }
+        let row = insert_room(&mut *transaction, room).await?;
+        transaction.commit().await?;
         row.try_into()
+    }
+
+    pub async fn activate_room(&self, room_id: Uuid) -> Result<FlowRoom, StoreError> {
+        let row = sqlx::query_as::<_, RoomRow>(
+            r"
+            UPDATE flow_rooms
+            SET state = 'ready', failure_reason = NULL, updated_at = now()
+            WHERE id = $1 AND state = 'provisioning'
+            RETURNING *
+            ",
+        )
+        .bind(room_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(StoreError::Conflict("room is not provisioning"))?;
+        row.try_into()
+    }
+
+    pub async fn fail_room(&self, room_id: Uuid, reason: &str) -> Result<(), StoreError> {
+        let result = sqlx::query(
+            r"
+            UPDATE flow_rooms
+            SET state = 'failed', failure_reason = $2, updated_at = now()
+            WHERE id = $1 AND state = 'provisioning'
+            ",
+        )
+        .bind(room_id)
+        .bind(truncate(reason, 1000))
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 1 {
+            Ok(())
+        } else {
+            Err(StoreError::Conflict("room is not provisioning"))
+        }
     }
 
     pub async fn get_room(
@@ -909,14 +979,26 @@ impl PgStore {
 
         let group = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, String, i32)>(
             r"
-            SELECT organization_id, project_id, service_instance_id,
-                   queue_name, mode, match_size
-            FROM matchmaking_tickets
-            WHERE state = 'queued' AND expires_at > now()
-            GROUP BY organization_id, project_id, service_instance_id,
-                     queue_name, mode, match_size
-            HAVING count(*) >= match_size
-            ORDER BY min(created_at)
+            SELECT t.organization_id, t.project_id, t.service_instance_id,
+                   t.queue_name, t.mode, t.match_size
+            FROM matchmaking_tickets t
+            JOIN flow_service_instances s
+              ON s.id = t.service_instance_id
+             AND s.organization_id = t.organization_id
+             AND s.project_id = t.project_id
+            WHERE t.state = 'queued' AND t.expires_at > now()
+              AND (
+                SELECT count(*)
+                FROM flow_rooms r
+                WHERE r.organization_id = t.organization_id
+                  AND r.project_id = t.project_id
+                  AND r.service_instance_id = t.service_instance_id
+                  AND r.state IN ('provisioning', 'ready')
+              ) < COALESCE((s.desired_spec ->> 'max_rooms')::bigint, 100)
+            GROUP BY t.organization_id, t.project_id, t.service_instance_id,
+                     t.queue_name, t.mode, t.match_size
+            HAVING count(*) >= t.match_size
+            ORDER BY min(t.created_at)
             LIMIT 1
             ",
         )
@@ -946,6 +1028,22 @@ impl PgStore {
         ))
         .map_err(|_| StoreError::Configuration("match group is not serializable"))?;
         advisory_lock(&mut transaction, &group_lock_key).await?;
+        advisory_lock(
+            &mut transaction,
+            &format!("service-instance:{service_instance_id}"),
+        )
+        .await?;
+        let (room_limit, active_rooms) = service_room_capacity(
+            &mut transaction,
+            organization_id,
+            project_id,
+            service_instance_id,
+        )
+        .await?;
+        if active_rooms >= u64::from(room_limit) {
+            transaction.commit().await?;
+            return Ok(None);
+        }
 
         let rows = sqlx::query_as::<_, TicketRow>(
             r"
@@ -1212,6 +1310,48 @@ where
     .fetch_one(executor)
     .await
     .map_err(map_database_error)
+}
+
+async fn service_room_capacity(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    project_id: Uuid,
+    service_instance_id: Uuid,
+) -> Result<(u32, u64), StoreError> {
+    let desired_spec: Value = sqlx::query_scalar(
+        r"
+        SELECT desired_spec
+        FROM flow_service_instances
+        WHERE id = $1
+          AND organization_id = $2
+          AND project_id = $3
+        ",
+    )
+    .bind(service_instance_id)
+    .bind(organization_id)
+    .bind(project_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(StoreError::NotFound)?;
+    let room_limit = room_limit_from_spec(&desired_spec)?;
+    let active_rooms: i64 = sqlx::query_scalar(
+        r"
+        SELECT count(*)
+        FROM flow_rooms
+        WHERE organization_id = $1
+          AND project_id = $2
+          AND service_instance_id = $3
+          AND state IN ('provisioning', 'ready')
+        ",
+    )
+    .bind(organization_id)
+    .bind(project_id)
+    .bind(service_instance_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    let active_rooms =
+        u64::try_from(active_rooms).map_err(|_| StoreError::CorruptData("active room count"))?;
+    Ok((room_limit, active_rooms))
 }
 
 async fn requeue_abandoned_matches(
@@ -1586,6 +1726,8 @@ pub enum StoreError {
     NotFound,
     #[error("resource conflict: {0}")]
     Conflict(&'static str),
+    #[error("room limit of {limit} has been reached")]
+    RoomLimitExceeded { limit: u32 },
     #[error("service instance generation {requested} is stale; current generation is {current}")]
     StaleGeneration { current: i64, requested: i64 },
     #[error("store configuration error: {0}")]

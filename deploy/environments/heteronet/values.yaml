@@ -29,9 +29,7 @@ database:
 api:
   replicaCount: 3
   publicUrls:
-    - https://flow-a.heterocloud.mizuame.app
-    - https://flow-b.heterocloud.mizuame.app
-    - https://flow-c.heterocloud.mizuame.app
+    - https://flow.heterocloud.mizuame.app
   # Per-node Caddy terminates TLS and health-checks all three VPN upstreams.
   # Enable this separate plaintext L4 service only behind a trusted TLS tier
   # that also blocks /internal/*.
@@ -47,9 +45,7 @@ matchmaker:
 signaling:
   replicaCount: 3
   publicUrls:
-    - wss://flow-a.heterocloud.mizuame.app
-    - wss://flow-b.heterocloud.mizuame.app
-    - wss://flow-c.heterocloud.mizuame.app
+    - wss://flow.heterocloud.mizuame.app
   publicService:
     enabled: false
 
@@ -57,11 +53,9 @@ livekit:
   replicaCount: 3
   image:
     repository: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-livekit
-    tag: "0.1.5"
+    tag: "0.1.6"
   publicUrls:
-    - wss://rtc-a.heterocloud.mizuame.app
-    - wss://rtc-b.heterocloud.mizuame.app
-    - wss://rtc-c.heterocloud.mizuame.app
+    - wss://flow.heterocloud.mizuame.app
   signal:
     publicService:
       enabled: false
@@ -82,9 +76,7 @@ coturn:
   replicaCount: 3
   realm: heterocloud-flow
   publicHosts:
-    - turn-a.heterocloud.mizuame.app
-    - turn-b.heterocloud.mizuame.app
-    - turn-c.heterocloud.mizuame.app
+    - flow.heterocloud.mizuame.app
   metrics:
     urls:
       - http://10.250.0.4:9641/metrics

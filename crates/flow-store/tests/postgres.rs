@@ -120,6 +120,83 @@ async fn p2p_match_is_claimed_and_completed() {
 }
 
 #[tokio::test]
+async fn room_limit_is_atomic_across_room_creation_and_matchmaking() {
+    let _guard = DATABASE_TEST_LOCK.lock().await;
+    let Some(store) = test_store(8).await else {
+        return;
+    };
+    let scope = Scope {
+        organization_id: Uuid::new_v4(),
+        project_id: Uuid::new_v4(),
+        service_instance_id: Uuid::new_v4(),
+    };
+    store
+        .reconcile_service_instance(reconcile_command(
+            scope,
+            1,
+            Uuid::new_v4(),
+            "limited-flow",
+            json!({"max_rooms": 1}),
+        ))
+        .await
+        .unwrap();
+
+    let make_room = || {
+        let id = Uuid::now_v7();
+        NewRoom {
+            id,
+            organization_id: scope.organization_id,
+            project_id: scope.project_id,
+            service_instance_id: scope.service_instance_id,
+            name: format!("room-{id}"),
+            provider_room_name: None,
+            mode: SessionMode::P2p,
+            state: RoomState::Ready,
+            max_participants: 2,
+            metadata: json!({}),
+        }
+    };
+    let first_store = store.clone();
+    let second_store = store.clone();
+    let (first, second) = tokio::join!(
+        first_store.create_room(make_room()),
+        second_store.create_room(make_room())
+    );
+    let results = [first, second];
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, Err(StoreError::RoomLimitExceeded { limit: 1 })))
+            .count(),
+        1
+    );
+
+    let snapshot = store
+        .service_overview_snapshot(
+            scope.organization_id,
+            scope.project_id,
+            scope.service_instance_id,
+            Duration::from_secs(45),
+        )
+        .await
+        .unwrap();
+    assert_eq!(snapshot.active_rooms, 1);
+    assert_eq!(snapshot.room_limit, 1);
+
+    let queue = format!("limited-{}", Uuid::new_v4().simple());
+    create_ticket(&store, scope, &queue).await;
+    create_ticket(&store, scope, &queue).await;
+    assert!(
+        store
+            .claim_match(Duration::from_secs(30))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn rooms_and_matchmaking_are_service_instance_scoped() {
     let _guard = DATABASE_TEST_LOCK.lock().await;
     let Some(store) = test_store(4).await else {

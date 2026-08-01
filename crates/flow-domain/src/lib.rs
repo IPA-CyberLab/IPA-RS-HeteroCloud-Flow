@@ -10,6 +10,9 @@ const MAX_EXTERNAL_ID_LEN: usize = 128;
 const MAX_QUEUE_NAME_LEN: usize = 96;
 const MAX_ROOM_NAME_LEN: usize = 160;
 
+pub const DEFAULT_MAX_ROOMS: u32 = 100;
+pub const MAX_ROOMS: u32 = 1_000_000;
+
 pub const SIGNALING_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 pub const SIGNALING_CONNECTION_STALE_AFTER: Duration = Duration::from_secs(45);
 
@@ -344,8 +347,44 @@ impl ServiceInstanceReconcile {
             });
         }
         validate_display_name("name", &self.name, 120)?;
-        ensure_json_object("spec", &self.spec)
+        ensure_json_object("spec", &self.spec)?;
+        room_limit_from_spec(&self.spec)?;
+        Ok(())
     }
+}
+
+/// Returns the configured concurrent room limit from a Flow service spec.
+///
+/// Specs created before `max_rooms` was introduced use [`DEFAULT_MAX_ROOMS`].
+///
+/// # Errors
+///
+/// Returns [`ValidationError`] when `max_rooms` is not an integer in the
+/// supported range.
+pub fn room_limit_from_spec(spec: &Value) -> Result<u32, ValidationError> {
+    ensure_json_object("spec", spec)?;
+    let Some(value) = spec.get("max_rooms") else {
+        return Ok(DEFAULT_MAX_ROOMS);
+    };
+    let Some(value) = value.as_u64() else {
+        return Err(ValidationError::OutOfRange {
+            field: "max_rooms",
+            min: 1,
+            max: i64::from(MAX_ROOMS),
+        });
+    };
+    if !(1..=u64::from(MAX_ROOMS)).contains(&value) {
+        return Err(ValidationError::OutOfRange {
+            field: "max_rooms",
+            min: 1,
+            max: i64::from(MAX_ROOMS),
+        });
+    }
+    u32::try_from(value).map_err(|_| ValidationError::OutOfRange {
+        field: "max_rooms",
+        min: 1,
+        max: i64::from(MAX_ROOMS),
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -501,8 +540,29 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        NewTicket, PrincipalContext, ServiceInstanceReconcile, SessionMode, ValidationError,
+        DEFAULT_MAX_ROOMS, NewTicket, PrincipalContext, ServiceInstanceReconcile, SessionMode,
+        ValidationError, room_limit_from_spec,
     };
+
+    #[test]
+    fn room_limit_defaults_and_validates_bounds() {
+        assert_eq!(room_limit_from_spec(&json!({})).unwrap(), DEFAULT_MAX_ROOMS);
+        assert_eq!(room_limit_from_spec(&json!({"max_rooms": 42})).unwrap(), 42);
+        assert!(matches!(
+            room_limit_from_spec(&json!({"max_rooms": 0})),
+            Err(ValidationError::OutOfRange {
+                field: "max_rooms",
+                ..
+            })
+        ));
+        assert!(matches!(
+            room_limit_from_spec(&json!({"max_rooms": "42"})),
+            Err(ValidationError::OutOfRange {
+                field: "max_rooms",
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn principal_wildcard_permission_is_honored() {

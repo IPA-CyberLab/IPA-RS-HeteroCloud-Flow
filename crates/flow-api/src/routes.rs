@@ -176,7 +176,7 @@ async fn service_overview(
             stun: state.turn.stun_urls(),
             turn: state.turn.urls().to_vec(),
         },
-        room_limit: None,
+        room_limit: Some(u64::from(snapshot.room_limit)),
     }))
 }
 
@@ -434,7 +434,7 @@ async fn create_room(
         name: room_name.clone(),
         provider_room_name: provider_room_name.clone(),
         mode: request.mode,
-        state: RoomState::Ready,
+        state: RoomState::Provisioning,
         max_participants: request.max_participants,
         metadata: request.metadata.clone(),
     };
@@ -457,14 +457,14 @@ async fn create_room(
         created_at: now,
         updated_at: now,
     };
-    if request.mode == SessionMode::Sfu {
-        state
-            .livekit
-            .create_room(&preview)
-            .await
-            .map_err(|error| ApiError::dependency(error.to_string()))?;
+    state.store.create_room(new_room).await?;
+    if request.mode == SessionMode::Sfu
+        && let Err(error) = state.livekit.create_room(&preview).await
+    {
+        state.store.fail_room(id, &error.to_string()).await?;
+        return Err(ApiError::dependency(error.to_string()));
     }
-    let room = state.store.create_room(new_room).await?;
+    let room = state.store.activate_room(id).await?;
     audit(
         &state,
         &context,
@@ -987,7 +987,7 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
     }
 
     #[test]
-    fn service_overview_shape_keeps_unlimited_rooms_explicit() {
+    fn service_overview_shape_includes_room_limit() {
         let rendered = serde_json::to_value(ServiceOverviewResponse {
             measured_at: chrono::Utc::now(),
             active_rooms: 3,
@@ -1005,12 +1005,12 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
                 stun: vec!["stun:turn.example.test:3478".into()],
                 turn: vec!["turn:turn.example.test:3478?transport=udp".into()],
             },
-            room_limit: None,
+            room_limit: Some(100),
         })
         .unwrap();
         assert_eq!(rendered["active_rooms"], 3);
         assert_eq!(rendered["transferred_bytes"], 200);
-        assert!(rendered["room_limit"].is_null());
+        assert_eq!(rendered["room_limit"], 100);
         assert!(rendered["turn_allocations"].is_null());
         assert_eq!(
             rendered["endpoints"]["stun"][0],

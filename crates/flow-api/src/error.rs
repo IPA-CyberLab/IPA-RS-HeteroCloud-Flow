@@ -76,6 +76,11 @@ impl From<StoreError> for ApiError {
                 message: "resource was not found".into(),
             },
             StoreError::Conflict(message) => Self::conflict(message),
+            StoreError::RoomLimitExceeded { limit } => Self {
+                status: StatusCode::CONFLICT,
+                code: "room_limit_exceeded",
+                message: format!("room limit of {limit} has been reached"),
+            },
             StoreError::StaleGeneration { current, requested } => Self::conflict(format!(
                 "generation {requested} is stale; current generation is {current}"
             )),
