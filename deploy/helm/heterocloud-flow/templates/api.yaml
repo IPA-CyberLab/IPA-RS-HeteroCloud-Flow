@@ -95,6 +95,8 @@ spec:
                   key: {{ .Values.principalAuth.contextSecretKey }}
             - name: LIVEKIT_URL
               value: {{ .Values.livekit.internalUrl | quote }}
+            - name: FLOW_API_URLS
+              value: {{ join "," .Values.api.publicUrls | quote }}
             - name: LIVEKIT_WS_URLS
               value: {{ join "," .Values.livekit.publicUrls | quote }}
             - name: LIVEKIT_API_KEY
@@ -120,6 +122,8 @@ spec:
                   key: turn-shared-secret
             - name: TURN_CREDENTIAL_TTL_SECONDS
               value: {{ .Values.coturn.credentialTtlSeconds | quote }}
+            - name: COTURN_METRICS_URLS
+              value: {{ join "," .Values.coturn.metrics.urls | quote }}
             - name: RUST_LOG
               value: info
           readinessProbe:

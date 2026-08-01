@@ -68,6 +68,9 @@ spec:
               --no-dynamic-ip-list
               --no-dynamic-realms
               --no-multicast-peers
+              --prometheus
+              --prometheus-port={{ .Values.coturn.metrics.port }}
+              --prometheus-username-labels
           env:
             - name: TURN_SHARED_SECRET
               valueFrom:
@@ -83,6 +86,9 @@ spec:
               containerPort: {{ .Values.coturn.servicePort }}
               hostPort: {{ .Values.coturn.servicePort }}
               protocol: UDP
+            - name: metrics
+              containerPort: {{ .Values.coturn.metrics.port }}
+              protocol: TCP
           readinessProbe:
             tcpSocket:
               port: turn-tcp
@@ -149,3 +155,22 @@ spec:
       port: {{ .Values.coturn.servicePort }}
       targetPort: turn-tcp
       protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flow.fullname" . }}-coturn-metrics
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coturn
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "flow.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: coturn
+  ports:
+    - name: metrics
+      port: {{ .Values.coturn.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+      appProtocol: http

@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use flow_domain::{FlowRoom, PrincipalContext, SessionMode};
 use livekit_api::{
@@ -6,6 +6,8 @@ use livekit_api::{
     services::{LiveKitApi, room::CreateRoomOptions},
 };
 use thiserror::Error;
+
+const ROOM_API_BATCH_SIZE: usize = 100;
 
 #[derive(Clone)]
 pub struct LiveKitClient {
@@ -59,6 +61,58 @@ impl LiveKitClient {
             )
             .await
             .map_err(|error| LiveKitError::Service(error.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn participant_count(&self, room_names: &[String]) -> Result<u64, LiveKitError> {
+        let mut count = 0_u64;
+        let mut seen_rooms = BTreeSet::new();
+        for names in room_names.chunks(ROOM_API_BATCH_SIZE) {
+            let rooms = self
+                .api
+                .room()
+                .list_rooms(names.to_vec())
+                .await
+                .map_err(|error| LiveKitError::Service(error.to_string()))?;
+            for room in rooms {
+                if !names.iter().any(|name| name == &room.name) {
+                    return Err(LiveKitError::UnexpectedProviderRoom(room.name));
+                }
+                if !seen_rooms.insert(room.name) {
+                    return Err(LiveKitError::DuplicateProviderRoom);
+                }
+                count = count
+                    .checked_add(u64::from(room.num_participants))
+                    .ok_or(LiveKitError::ParticipantCountOverflow)?;
+            }
+        }
+        Ok(count)
+    }
+
+    pub async fn delete_rooms(&self, room_names: &[String]) -> Result<(), LiveKitError> {
+        let mut seen_rooms = BTreeSet::new();
+        for names in room_names.chunks(ROOM_API_BATCH_SIZE) {
+            // Listing first makes retries safe when an earlier attempt deleted only a prefix.
+            let rooms = self
+                .api
+                .room()
+                .list_rooms(names.to_vec())
+                .await
+                .map_err(|error| LiveKitError::Service(error.to_string()))?;
+            for room in rooms {
+                if !names.iter().any(|name| name == &room.name) {
+                    return Err(LiveKitError::UnexpectedProviderRoom(room.name));
+                }
+                if !seen_rooms.insert(room.name.clone()) {
+                    return Err(LiveKitError::DuplicateProviderRoom);
+                }
+                self.api
+                    .room()
+                    .delete_room(&room.name)
+                    .await
+                    .map_err(|error| LiveKitError::Service(error.to_string()))?;
+            }
+        }
         Ok(())
     }
 
@@ -122,6 +176,12 @@ pub enum LiveKitError {
     WrongMode,
     #[error("participant limit is invalid")]
     InvalidParticipantLimit,
+    #[error("LiveKit participant count overflowed")]
+    ParticipantCountOverflow,
+    #[error("LiveKit returned an unrequested provider room: {0}")]
+    UnexpectedProviderRoom(String),
+    #[error("LiveKit returned a duplicate provider room")]
+    DuplicateProviderRoom,
     #[error("room metadata is invalid")]
     InvalidMetadata,
     #[error("LiveKit service request failed: {0}")]

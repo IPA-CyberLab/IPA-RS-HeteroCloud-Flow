@@ -66,6 +66,9 @@ spec:
             - name: signal
               containerPort: 7880
               protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.livekit.metrics.port }}
+              protocol: TCP
             - name: rtc-tcp
               containerPort: {{ .Values.livekit.rtc.tcpPort }}
               hostPort: {{ .Values.livekit.rtc.tcpPort }}
@@ -164,6 +167,11 @@ spec:
     - name: signal
       port: 7880
       targetPort: signal
+      protocol: TCP
+      appProtocol: http
+    - name: metrics
+      port: {{ .Values.livekit.metrics.port }}
+      targetPort: metrics
       protocol: TCP
       appProtocol: http
 ---

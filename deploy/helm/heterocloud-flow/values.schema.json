@@ -131,7 +131,7 @@
     },
     "livekit": {
       "type": "object",
-      "required": ["replicaCount", "publicUrls", "signal"],
+      "required": ["replicaCount", "publicUrls", "signal", "metrics"],
       "properties": {
         "replicaCount": {"type": "integer", "minimum": 3},
         "publicUrls": {
@@ -164,12 +164,19 @@
               }
             }
           }
+        },
+        "metrics": {
+          "type": "object",
+          "required": ["port"],
+          "properties": {
+            "port": {"type": "integer", "minimum": 1024, "maximum": 65535}
+          }
         }
       }
     },
     "coturn": {
       "type": "object",
-      "required": ["replicaCount", "publicHosts"],
+      "required": ["replicaCount", "publicHosts", "metrics"],
       "properties": {
         "replicaCount": {"type": "integer", "minimum": 3},
         "publicHosts": {
@@ -192,6 +199,19 @@
           "type": "integer",
           "minimum": 1024,
           "maximum": 65535
+        },
+        "metrics": {
+          "type": "object",
+          "required": ["port", "urls"],
+          "properties": {
+            "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
+            "urls": {
+              "type": "array",
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^http://"}
+            }
+          }
         }
       }
     },

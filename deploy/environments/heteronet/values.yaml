@@ -29,9 +29,9 @@ database:
 api:
   replicaCount: 3
   publicUrls:
-    - https://flow-a.163-220-236-51.sslip.io
-    - https://flow-b.163-220-236-52.sslip.io
-    - https://flow-c.163-220-236-53.sslip.io
+    - https://flow-a.heterocloud.mizuame.app
+    - https://flow-b.heterocloud.mizuame.app
+    - https://flow-c.heterocloud.mizuame.app
   # Per-node Caddy terminates TLS and health-checks all three VPN upstreams.
   # Enable this separate plaintext L4 service only behind a trusted TLS tier
   # that also blocks /internal/*.
@@ -47,18 +47,18 @@ matchmaker:
 signaling:
   replicaCount: 3
   publicUrls:
-    - wss://flow-a.163-220-236-51.sslip.io
-    - wss://flow-b.163-220-236-52.sslip.io
-    - wss://flow-c.163-220-236-53.sslip.io
+    - wss://flow-a.heterocloud.mizuame.app
+    - wss://flow-b.heterocloud.mizuame.app
+    - wss://flow-c.heterocloud.mizuame.app
   publicService:
     enabled: false
 
 livekit:
   replicaCount: 3
   publicUrls:
-    - wss://rtc-a.163-220-236-51.sslip.io
-    - wss://rtc-b.163-220-236-52.sslip.io
-    - wss://rtc-c.163-220-236-53.sslip.io
+    - wss://rtc-a.heterocloud.mizuame.app
+    - wss://rtc-b.heterocloud.mizuame.app
+    - wss://rtc-c.heterocloud.mizuame.app
   signal:
     publicService:
       enabled: false
@@ -74,9 +74,14 @@ coturn:
   replicaCount: 3
   realm: heterocloud-flow
   publicHosts:
-    - turn-a.163-220-236-51.sslip.io
-    - turn-b.163-220-236-52.sslip.io
-    - turn-c.163-220-236-53.sslip.io
+    - turn-a.heterocloud.mizuame.app
+    - turn-b.heterocloud.mizuame.app
+    - turn-c.heterocloud.mizuame.app
+  metrics:
+    urls:
+      - http://10.250.0.4:9641/metrics
+      - http://10.250.0.5:9641/metrics
+      - http://10.250.0.6:9641/metrics
   resources:
     requests:
       cpu: 100m

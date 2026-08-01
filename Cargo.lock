@@ -692,7 +692,7 @@ checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 
 [[package]]
 name = "flow-api"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "flow-auth"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -734,7 +734,7 @@ dependencies = [
 
 [[package]]
 name = "flow-domain"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "serde",
@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "flow-livekit"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "flow-domain",
@@ -757,7 +757,7 @@ dependencies = [
 
 [[package]]
 name = "flow-matchmaker"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -775,7 +775,7 @@ dependencies = [
 
 [[package]]
 name = "flow-signaling"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -797,7 +797,7 @@ dependencies = [
 
 [[package]]
 name = "flow-store"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "flow-domain",
@@ -810,7 +810,7 @@ dependencies = [
 
 [[package]]
 name = "flow-turn"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",

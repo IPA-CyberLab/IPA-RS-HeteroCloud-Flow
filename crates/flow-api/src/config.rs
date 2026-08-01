@@ -6,6 +6,8 @@ use flow_livekit::LiveKitClient;
 use flow_turn::TurnCredentialIssuer;
 use url::Url;
 
+use crate::coturn_metrics::CoturnMetricsClient;
+
 pub struct Config {
     pub bind_addr: SocketAddr,
     pub database_url: String,
@@ -14,6 +16,8 @@ pub struct Config {
     pub principal_authenticator: PrincipalAuthenticator,
     pub provider_authenticator: ProviderAuthenticator,
     pub livekit: LiveKitClient,
+    pub coturn_metrics: CoturnMetricsClient,
+    pub api_urls: Vec<String>,
     pub livekit_ws_urls: Vec<String>,
     pub signaling_urls: Vec<String>,
     pub turn: TurnCredentialIssuer,
@@ -48,6 +52,14 @@ impl Config {
         .context("invalid LiveKit configuration")?;
         let livekit_ws_urls = required_wss_url_list("LIVEKIT_WS_URLS")?;
         let signaling_urls = required_wss_url_list("FLOW_SIGNALING_URLS")?;
+        let api_urls = match env::var("FLOW_API_URLS") {
+            Ok(value) => parse_https_url_list(&value).context("FLOW_API_URLS is invalid")?,
+            Err(env::VarError::NotPresent) => signaling_urls
+                .iter()
+                .map(|url| url.replacen("wss://", "https://", 1))
+                .collect(),
+            Err(error) => return Err(error).context("FLOW_API_URLS is invalid"),
+        };
         let turn_urls = required("TURN_URLS")?
             .split(',')
             .map(str::trim)
@@ -68,6 +80,9 @@ impl Config {
         {
             bail!("LIVEKIT_TOKEN_TTL_SECONDS must be positive and no longer than the auth TTL");
         }
+        let coturn_metrics_urls = optional_url_list("COTURN_METRICS_URLS")?;
+        let coturn_metrics = CoturnMetricsClient::new(coturn_metrics_urls)
+            .context("COTURN_METRICS_URLS is invalid")?;
 
         Ok(Self {
             bind_addr,
@@ -77,12 +92,30 @@ impl Config {
             principal_authenticator,
             provider_authenticator,
             livekit,
+            coturn_metrics,
+            api_urls,
             livekit_ws_urls,
             signaling_urls,
             turn,
             participant_token_ttl,
         })
     }
+}
+
+fn optional_url_list(name: &'static str) -> Result<Vec<String>> {
+    let value = match env::var(name) {
+        Ok(value) => value,
+        Err(env::VarError::NotPresent) => return Ok(Vec::new()),
+        Err(error) => return Err(error).with_context(|| format!("{name} is invalid")),
+    };
+    if value.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let entries = value.split(',').map(str::trim).collect::<Vec<_>>();
+    if entries.iter().any(|entry| entry.is_empty()) {
+        bail!("{name} contains an empty URL");
+    }
+    Ok(entries.into_iter().map(ToOwned::to_owned).collect())
 }
 
 fn required(name: &'static str) -> Result<String> {
@@ -94,6 +127,14 @@ fn required_wss_url_list(name: &'static str) -> Result<Vec<String>> {
 }
 
 fn parse_wss_url_list(value: &str) -> Result<Vec<String>> {
+    parse_origin_url_list(value, "wss")
+}
+
+fn parse_https_url_list(value: &str) -> Result<Vec<String>> {
+    parse_origin_url_list(value, "https")
+}
+
+fn parse_origin_url_list(value: &str, expected_scheme: &str) -> Result<Vec<String>> {
     let entries = value.split(',').map(str::trim).collect::<Vec<_>>();
     if entries.is_empty() || entries.len() > 16 || entries.iter().any(|entry| entry.is_empty()) {
         bail!("URL list must contain between 1 and 16 entries");
@@ -103,7 +144,7 @@ fn parse_wss_url_list(value: &str) -> Result<Vec<String>> {
     let mut urls = Vec::with_capacity(entries.len());
     for entry in entries {
         let parsed = Url::parse(entry).context("URL cannot be parsed")?;
-        if parsed.scheme() != "wss"
+        if parsed.scheme() != expected_scheme
             || parsed.host().is_none()
             || !parsed.username().is_empty()
             || parsed.password().is_some()
@@ -111,7 +152,7 @@ fn parse_wss_url_list(value: &str) -> Result<Vec<String>> {
             || parsed.fragment().is_some()
             || !matches!(parsed.path(), "" | "/")
         {
-            bail!("URL must be an origin-only wss URL without credentials");
+            bail!("URL must use the required scheme and contain only an origin");
         }
         let normalized = parsed.as_str().trim_end_matches('/').to_owned();
         if !seen.insert(normalized.clone()) {
@@ -135,7 +176,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::parse_wss_url_list;
+    use super::{parse_https_url_list, parse_wss_url_list};
 
     #[test]
     fn parses_ordered_secure_endpoint_list() {
@@ -156,5 +197,15 @@ mod tests {
     fn rejects_insecure_or_duplicate_endpoints() {
         assert!(parse_wss_url_list("ws://flow-a.example.test").is_err());
         assert!(parse_wss_url_list("wss://flow-a.example.test,wss://flow-a.example.test").is_err());
+    }
+
+    #[test]
+    fn parses_https_api_endpoint_list() {
+        assert_eq!(
+            parse_https_url_list("https://flow-a.example.test,https://flow-b.example.test/")
+                .unwrap(),
+            ["https://flow-a.example.test", "https://flow-b.example.test"]
+        );
+        assert!(parse_https_url_list("http://flow-a.example.test").is_err());
     }
 }

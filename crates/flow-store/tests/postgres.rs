@@ -2,7 +2,8 @@ use std::{env, time::Duration};
 
 use chrono::Utc;
 use flow_domain::{
-    NewAuditEvent, NewRoom, NewTicket, RoomState, ServiceInstanceReconcile, SessionMode,
+    NewAuditEvent, NewRoom, NewSignalingConnection, NewTicket, NewUsageEvent, RoomState,
+    ServiceInstanceDelete, ServiceInstancePhase, ServiceInstanceReconcile, SessionMode,
 };
 use flow_store::{PgStore, StoreError};
 use serde_json::json;
@@ -243,6 +244,228 @@ async fn audit_records_principal_context_id() {
     assert_eq!(stored, Some(principal_context_id));
 }
 
+#[tokio::test]
+async fn delete_is_scoped_idempotent_and_leaves_a_tombstone() {
+    let _guard = DATABASE_TEST_LOCK.lock().await;
+    let Some(store) = test_store(4).await else {
+        return;
+    };
+    let scope = provision_scope(&store, None).await;
+    let principal_id = Uuid::new_v4();
+    let room_id = Uuid::now_v7();
+    store
+        .create_room(NewRoom {
+            id: room_id,
+            organization_id: scope.organization_id,
+            project_id: scope.project_id,
+            service_instance_id: scope.service_instance_id,
+            name: format!("room-{room_id}"),
+            provider_room_name: Some(format!("flow-{room_id}")),
+            mode: SessionMode::Sfu,
+            state: RoomState::Ready,
+            max_participants: 16,
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+
+    let first = delete_command(scope, 2, Uuid::now_v7(), principal_id);
+    let prepared = store.prepare_delete_service_instance(&first).await.unwrap();
+    assert!(!prepared.completed);
+    assert_eq!(prepared.status.phase, ServiceInstancePhase::Deleting);
+    assert_eq!(prepared.provider_room_names, [format!("flow-{room_id}")]);
+
+    let duplicate = store.prepare_delete_service_instance(&first).await.unwrap();
+    assert_eq!(duplicate.operation_id, prepared.operation_id);
+    let refreshed_token = delete_command(scope, 2, Uuid::now_v7(), principal_id);
+    let refreshed = store
+        .prepare_delete_service_instance(&refreshed_token)
+        .await
+        .unwrap();
+    assert_eq!(refreshed.operation_id, prepared.operation_id);
+
+    let completed = store
+        .complete_delete_service_instance(&refreshed_token, prepared.operation_id)
+        .await
+        .unwrap();
+    assert!(completed.completed_now);
+    assert_eq!(completed.status.phase, ServiceInstancePhase::Deleted);
+    assert!(
+        !store
+            .service_instance_is_ready(
+                scope.organization_id,
+                scope.project_id,
+                scope.service_instance_id,
+            )
+            .await
+            .unwrap()
+    );
+    let remaining_rooms: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM flow_rooms WHERE service_instance_id = $1")
+            .bind(scope.service_instance_id)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert_eq!(remaining_rooms, 0);
+
+    let retried = store.prepare_delete_service_instance(&first).await.unwrap();
+    assert!(retried.completed);
+    assert_eq!(retried.operation_id, prepared.operation_id);
+    let completed_again = store
+        .complete_delete_service_instance(&first, prepared.operation_id)
+        .await
+        .unwrap();
+    assert!(!completed_again.completed_now);
+    assert_eq!(completed_again.status.phase, ServiceInstancePhase::Deleted);
+
+    assert!(matches!(
+        store
+            .reconcile_service_instance(reconcile_command(
+                scope,
+                3,
+                Uuid::now_v7(),
+                "cannot-recreate",
+                json!({}),
+            ))
+            .await,
+        Err(StoreError::Conflict(
+            "service instance is deleting or has been deleted"
+        ))
+    ));
+}
+
+#[tokio::test]
+async fn overview_uses_ready_rooms_active_connections_and_measured_bytes() {
+    let _guard = DATABASE_TEST_LOCK.lock().await;
+    let Some(store) = test_store(4).await else {
+        return;
+    };
+    let scope = provision_scope(&store, None).await;
+    let p2p_room_id = Uuid::now_v7();
+    let sfu_room_id = Uuid::now_v7();
+    for (room_id, mode, provider_room_name, state) in [
+        (p2p_room_id, SessionMode::P2p, None, RoomState::Ready),
+        (
+            sfu_room_id,
+            SessionMode::Sfu,
+            Some(format!("flow-{sfu_room_id}")),
+            RoomState::Ready,
+        ),
+        (Uuid::now_v7(), SessionMode::P2p, None, RoomState::Failed),
+    ] {
+        store
+            .create_room(NewRoom {
+                id: room_id,
+                organization_id: scope.organization_id,
+                project_id: scope.project_id,
+                service_instance_id: scope.service_instance_id,
+                name: format!("room-{room_id}"),
+                provider_room_name,
+                mode,
+                state,
+                max_participants: 16,
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+    }
+    let connection_id = Uuid::now_v7();
+    store
+        .open_signaling_connection(NewSignalingConnection {
+            connection_id,
+            organization_id: scope.organization_id,
+            project_id: scope.project_id,
+            service_instance_id: scope.service_instance_id,
+            room_id: p2p_room_id,
+            principal_id: Uuid::new_v4(),
+        })
+        .await
+        .unwrap();
+    for (event_type, quantity) in [
+        ("ingress_bytes", 120_i64),
+        ("egress_bytes", 80_i64),
+        ("p2p_signaling_messages", 999_i64),
+    ] {
+        store
+            .record_usage(NewUsageEvent {
+                id: Uuid::now_v7(),
+                organization_id: scope.organization_id,
+                project_id: scope.project_id,
+                service_instance_id: scope.service_instance_id,
+                principal_id: None,
+                event_type: event_type.into(),
+                resource_id: None,
+                quantity,
+                idempotency_key: format!("{event_type}-{}", Uuid::now_v7()),
+                dimensions: json!({}),
+                occurred_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+    }
+
+    let current = store
+        .service_overview_snapshot(
+            scope.organization_id,
+            scope.project_id,
+            scope.service_instance_id,
+            Duration::from_secs(45),
+        )
+        .await
+        .unwrap();
+    assert_eq!(current.active_rooms, 2);
+    assert_eq!(current.p2p_connections, 1);
+    assert_eq!(current.ingress_bytes, 120);
+    assert_eq!(current.egress_bytes, 80);
+    assert_eq!(current.provider_room_names, [format!("flow-{sfu_room_id}")]);
+
+    sqlx::query(
+        "UPDATE flow_signaling_connections SET last_seen_at = now() - interval '1 minute' WHERE connection_id = $1",
+    )
+    .bind(connection_id)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    let stale = store
+        .service_overview_snapshot(
+            scope.organization_id,
+            scope.project_id,
+            scope.service_instance_id,
+            Duration::from_secs(45),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.p2p_connections, 0);
+    assert!(
+        store
+            .heartbeat_signaling_connection(connection_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .close_signaling_connection(connection_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .close_signaling_connection(connection_id)
+            .await
+            .unwrap()
+    );
+    let closed = store
+        .service_overview_snapshot(
+            scope.organization_id,
+            scope.project_id,
+            scope.service_instance_id,
+            Duration::from_secs(45),
+        )
+        .await
+        .unwrap();
+    assert_eq!(closed.p2p_connections, 0);
+}
+
 async fn create_ticket(store: &PgStore, scope: Scope, queue_name: &str) {
     store
         .create_ticket(NewTicket {
@@ -301,6 +524,22 @@ fn reconcile_command(
     }
 }
 
+fn delete_command(
+    scope: Scope,
+    generation: i64,
+    jwt_id: Uuid,
+    principal_id: Uuid,
+) -> ServiceInstanceDelete {
+    ServiceInstanceDelete {
+        jwt_id,
+        organization_id: scope.organization_id,
+        project_id: scope.project_id,
+        service_instance_id: scope.service_instance_id,
+        principal_id,
+        generation,
+    }
+}
+
 async fn test_store(max_connections: u32) -> Option<PgStore> {
     let Ok(database_url) = env::var("TEST_DATABASE_URL") else {
         eprintln!("TEST_DATABASE_URL is not set; skipping PostgreSQL integration test");
@@ -313,6 +552,9 @@ async fn test_store(max_connections: u32) -> Option<PgStore> {
     sqlx::query(
         r"
         TRUNCATE TABLE
+            flow_delete_token_receipts,
+            flow_delete_operations,
+            flow_signaling_connections,
             usage_events,
             audit_events,
             match_assignments,

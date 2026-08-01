@@ -9,6 +9,7 @@ metadata:
 data:
   livekit.yaml: |
     port: 7880
+    prometheus_port: {{ .Values.livekit.metrics.port }}
     redis:
       {{- if or .Values.redis.enabled .Values.externalRedis.sentinelUrls }}
       sentinel_master_name: {{ include "flow.redisSentinelMaster" . }}

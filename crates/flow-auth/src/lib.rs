@@ -19,6 +19,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub const PROVIDER_RECONCILE_ACTION: &str = "service-instance.reconcile";
+pub const PROVIDER_DELETE_ACTION: &str = "service-instance.delete";
 const PROVIDER_MAX_TOKEN_TTL_SECONDS: i64 = 60;
 const PROVIDER_NOT_BEFORE_OFFSET_SECONDS: i64 = 5;
 
@@ -84,6 +85,15 @@ impl ProviderAuthenticator {
     /// Returns [`AuthError`] for missing, malformed, untrusted, or invalid
     /// provider credentials.
     pub fn authenticate_headers(&self, headers: &HeaderMap) -> Result<ProviderClaims, AuthError> {
+        self.authenticate_headers_for_action(headers, PROVIDER_RECONCILE_ACTION)
+    }
+
+    /// Verifies a provider bearer token for one exact command action.
+    pub fn authenticate_headers_for_action(
+        &self,
+        headers: &HeaderMap,
+        expected_action: &str,
+    ) -> Result<ProviderClaims, AuthError> {
         let value = headers
             .get(AUTHORIZATION)
             .ok_or(AuthError::MissingCredentials)?
@@ -93,7 +103,7 @@ impl ProviderAuthenticator {
             .strip_prefix("Bearer ")
             .filter(|token| !token.is_empty())
             .ok_or(AuthError::InvalidHeader)?;
-        self.verify_token(token)
+        self.verify_token_for_action(token, expected_action)
     }
 
     /// Verifies the `HeteroCloud` provider token and its exact command contract.
@@ -103,6 +113,15 @@ impl ProviderAuthenticator {
     /// Returns [`AuthError`] when signature, key ID, registered claims, action,
     /// generation, or short lifetime is invalid.
     pub fn verify_token(&self, token: &str) -> Result<ProviderClaims, AuthError> {
+        self.verify_token_for_action(token, PROVIDER_RECONCILE_ACTION)
+    }
+
+    /// Verifies a provider token and requires one exact command action.
+    pub fn verify_token_for_action(
+        &self,
+        token: &str,
+        expected_action: &str,
+    ) -> Result<ProviderClaims, AuthError> {
         let header = decode_header(token).map_err(|_| AuthError::InvalidToken)?;
         if header.alg != Algorithm::EdDSA {
             return Err(AuthError::InvalidToken);
@@ -121,7 +140,7 @@ impl ProviderAuthenticator {
             .map_err(|_| AuthError::InvalidToken)?
             .claims;
 
-        if claims.action != PROVIDER_RECONCILE_ACTION || claims.generation <= 0 {
+        if claims.action != expected_action || claims.generation <= 0 {
             return Err(AuthError::InvalidProviderCommand);
         }
         if claims.expires_at <= claims.issued_at
@@ -367,8 +386,8 @@ mod tests {
 
     use super::{
         AuthError, PRINCIPAL_HEADER, PRINCIPAL_SIGNATURE_HEADER, PRINCIPAL_TIMESTAMP_HEADER,
-        PROVIDER_RECONCILE_ACTION, PrincipalAuthenticator, ProviderAuthenticator, ProviderClaims,
-        SignedPrincipal,
+        PROVIDER_DELETE_ACTION, PROVIDER_RECONCILE_ACTION, PrincipalAuthenticator,
+        ProviderAuthenticator, ProviderClaims, SignedPrincipal,
     };
 
     const PRINCIPAL_SECRET: &[u8] = b"principal-context-secret-with-at-least-thirty-two-bytes";
@@ -464,6 +483,19 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
     #[test]
     fn rejects_wrong_provider_action() {
         let token = provider_token("room.join");
+        assert_eq!(
+            provider_authenticator().verify_token(&token),
+            Err(AuthError::InvalidProviderCommand)
+        );
+    }
+
+    #[test]
+    fn verifies_delete_only_for_delete_contract() {
+        let token = provider_token(PROVIDER_DELETE_ACTION);
+        let claims = provider_authenticator()
+            .verify_token_for_action(&token, PROVIDER_DELETE_ACTION)
+            .unwrap();
+        assert_eq!(claims.action, PROVIDER_DELETE_ACTION);
         assert_eq!(
             provider_authenticator().verify_token(&token),
             Err(AuthError::InvalidProviderCommand)

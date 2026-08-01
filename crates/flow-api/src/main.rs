@@ -1,4 +1,5 @@
 mod config;
+mod coturn_metrics;
 mod error;
 mod routes;
 
@@ -43,6 +44,8 @@ async fn run() -> Result<()> {
         principal_auth: config.principal_authenticator,
         provider_auth: config.provider_authenticator,
         livekit: config.livekit,
+        coturn_metrics: config.coturn_metrics,
+        api_urls: config.api_urls,
         livekit_ws_urls: config.livekit_ws_urls,
         signaling_urls: config.signaling_urls,
         turn: config.turn,

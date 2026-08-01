@@ -59,6 +59,30 @@ impl TurnCredentialIssuer {
         self.issue_with_ttl(identity, self.ttl)
     }
 
+    #[must_use]
+    pub fn urls(&self) -> &[String] {
+        &self.urls
+    }
+
+    #[must_use]
+    pub fn stun_urls(&self) -> Vec<String> {
+        let mut urls = self
+            .urls
+            .iter()
+            .filter_map(|url| {
+                let authority = url
+                    .strip_prefix("turn:")
+                    .or_else(|| url.strip_prefix("turns:"))?
+                    .split('?')
+                    .next()?;
+                (!authority.is_empty()).then(|| format!("stun:{authority}"))
+            })
+            .collect::<Vec<_>>();
+        urls.sort();
+        urls.dedup();
+        urls
+    }
+
     /// Issues credentials capped by both the configured and delegated lifetime.
     ///
     /// # Errors
@@ -137,6 +161,25 @@ mod tests {
         assert_eq!(
             credentials.password,
             STANDARD.encode(mac.finalize().into_bytes())
+        );
+    }
+
+    #[test]
+    fn derives_deduplicated_stun_endpoints_from_turn_endpoints() {
+        let issuer = TurnCredentialIssuer::new(
+            vec![
+                "turn:turn.example.test:3478?transport=udp".into(),
+                "turn:turn.example.test:3478?transport=tcp".into(),
+                "turns:turn.example.test:5349?transport=tcp".into(),
+            ],
+            b"turn-secret-with-at-least-thirty-two-bytes",
+            Duration::from_mins(5),
+        )
+        .unwrap();
+
+        assert_eq!(
+            issuer.stun_urls(),
+            ["stun:turn.example.test:3478", "stun:turn.example.test:5349"]
         );
     }
 }

@@ -47,6 +47,14 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "internal_error",
+            message: message.into(),
+        }
+    }
 }
 
 impl From<AuthError> for ApiError {

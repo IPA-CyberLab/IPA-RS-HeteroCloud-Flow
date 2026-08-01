@@ -112,6 +112,8 @@ livekit:
     - wss://rtc-b.example.com
     - wss://rtc-c.example.com
   existingConfigSecret: ""
+  metrics:
+    port: 6789
   signal:
     servicePort: 7880
     publicService:
@@ -147,6 +149,9 @@ coturn:
   relayPortMin: 49160
   relayPortMax: 49260
   credentialTtlSeconds: 300
+  metrics:
+    port: 9641
+    urls: []
   annotations:
     networking.heteronetwork.io/traffic-mode: direct
   resources:

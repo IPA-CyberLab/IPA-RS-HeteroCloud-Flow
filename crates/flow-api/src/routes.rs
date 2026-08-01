@@ -8,10 +8,11 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use chrono::Utc;
-use flow_auth::{PrincipalAuthenticator, ProviderAuthenticator};
+use flow_auth::{PROVIDER_DELETE_ACTION, PrincipalAuthenticator, ProviderAuthenticator};
 use flow_domain::{
     FlowRoom, MatchAssignment, MatchmakingTicket, NewAuditEvent, NewRoom, NewTicket, NewUsageEvent,
-    PrincipalContext, RoomState, ServiceInstanceReconcile, ServiceInstanceStatus, SessionMode,
+    PrincipalContext, RoomState, SIGNALING_CONNECTION_STALE_AFTER, ServiceInstanceDelete,
+    ServiceInstanceReconcile, ServiceInstanceStatus, SessionMode,
 };
 use flow_livekit::LiveKitClient;
 use flow_store::PgStore;
@@ -22,6 +23,7 @@ use tower_http::trace::TraceLayer;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::coturn_metrics::CoturnMetricsClient;
 use crate::error::ApiError;
 
 const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
@@ -33,6 +35,8 @@ pub struct AppState {
     pub principal_auth: PrincipalAuthenticator,
     pub provider_auth: ProviderAuthenticator,
     pub livekit: LiveKitClient,
+    pub coturn_metrics: CoturnMetricsClient,
+    pub api_urls: Vec<String>,
     pub livekit_ws_urls: Vec<String>,
     pub signaling_urls: Vec<String>,
     pub turn: TurnCredentialIssuer,
@@ -45,8 +49,9 @@ pub fn router(state: AppState) -> Router {
         .route("/health/ready", get(ready))
         .route(
             "/internal/v1/service-instances/{service_instance_id}",
-            put(reconcile_service_instance),
+            put(reconcile_service_instance).delete(delete_service_instance),
         )
+        .route("/v1/service-overview", get(service_overview))
         .route(
             "/v1/queues/{queue_name}/tickets",
             post(create_ticket).get(list_tickets),
@@ -71,6 +76,84 @@ async fn ready(State(state): State<AppState>) -> Result<impl IntoResponse, ApiEr
     Ok(Json(json!({"status": "ready"})))
 }
 
+async fn service_overview(
+    State(state): State<AppState>,
+    context: RequestContext,
+) -> Result<impl IntoResponse, ApiError> {
+    context.require("flow.metrics.read")?;
+    let snapshot = state
+        .store
+        .service_overview_snapshot(
+            context.principal.organization_id,
+            context.principal.project_id,
+            context.principal.service_instance_id,
+            SIGNALING_CONNECTION_STALE_AFTER,
+        )
+        .await?;
+    let (livekit_result, coturn_result) = tokio::join!(
+        state
+            .livekit
+            .participant_count(&snapshot.provider_room_names),
+        state
+            .coturn_metrics
+            .scrape(context.principal.service_instance_id),
+    );
+    let sfu_participants =
+        livekit_result.map_err(|error| ApiError::dependency(error.to_string()))?;
+    let concurrent_connections = sfu_participants
+        .checked_add(snapshot.p2p_connections)
+        .ok_or_else(|| ApiError::internal("concurrent connection count overflowed"))?;
+    let mut ingress_bytes = snapshot.ingress_bytes;
+    let mut egress_bytes = snapshot.egress_bytes;
+    let mut turn_allocations = None;
+    match coturn_result {
+        Ok(Some(metrics)) => {
+            let measured_ingress = i64::try_from(metrics.ingress_bytes)
+                .map_err(|_| ApiError::internal("coturn ingress byte count exceeded i64"))?;
+            let measured_egress = i64::try_from(metrics.egress_bytes)
+                .map_err(|_| ApiError::internal("coturn egress byte count exceeded i64"))?;
+            ingress_bytes = ingress_bytes
+                .checked_add(measured_ingress)
+                .ok_or_else(|| ApiError::internal("ingress byte count overflowed"))?;
+            egress_bytes = egress_bytes
+                .checked_add(measured_egress)
+                .ok_or_else(|| ApiError::internal("egress byte count overflowed"))?;
+            turn_allocations = metrics.allocations;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            warn!(
+                %error,
+                service_instance_id = %context.principal.service_instance_id,
+                "coturn metrics scrape failed; returning database usage only"
+            );
+        }
+    }
+    let transferred_bytes = ingress_bytes
+        .checked_add(egress_bytes)
+        .ok_or_else(|| ApiError::internal("transferred byte count overflowed"))?;
+
+    Ok(Json(ServiceOverviewResponse {
+        measured_at: Utc::now(),
+        active_rooms: snapshot.active_rooms,
+        concurrent_connections,
+        sfu_participants,
+        p2p_connections: snapshot.p2p_connections,
+        ingress_bytes,
+        egress_bytes,
+        transferred_bytes,
+        turn_allocations,
+        endpoints: ServiceEndpoints {
+            api: state.api_urls.clone(),
+            signaling: state.signaling_urls.clone(),
+            livekit: state.livekit_ws_urls.clone(),
+            stun: state.turn.stun_urls(),
+            turn: state.turn.urls().to_vec(),
+        },
+        room_limit: None,
+    }))
+}
+
 async fn reconcile_service_instance(
     State(state): State<AppState>,
     Path(service_instance_id): Path<Uuid>,
@@ -78,13 +161,7 @@ async fn reconcile_service_instance(
     Json(request): Json<ReconcileRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let claims = state.provider_auth.authenticate_headers(&headers)?;
-    let idempotency_key = headers
-        .get(&IDEMPOTENCY_KEY_HEADER)
-        .ok_or_else(|| ApiError::bad_request("idempotency-key header is required"))?
-        .to_str()
-        .map_err(|_| ApiError::bad_request("idempotency-key header is invalid"))?
-        .parse::<Uuid>()
-        .map_err(|_| ApiError::bad_request("idempotency-key must be a UUID"))?;
+    let idempotency_key = provider_idempotency_key(&headers)?;
     if claims.jwt_id != idempotency_key
         || claims.service_instance_id != service_instance_id
         || claims.generation != request.generation
@@ -116,6 +193,77 @@ async fn reconcile_service_instance(
             status: outcome.status,
         }),
     ))
+}
+
+async fn delete_service_instance(
+    State(state): State<AppState>,
+    Path(service_instance_id): Path<Uuid>,
+    Query(query): Query<DeleteServiceInstanceQuery>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    let claims = state
+        .provider_auth
+        .authenticate_headers_for_action(&headers, PROVIDER_DELETE_ACTION)?;
+    let idempotency_key = provider_idempotency_key(&headers)?;
+    if claims.jwt_id != idempotency_key
+        || claims.service_instance_id != service_instance_id
+        || claims.generation != query.generation
+    {
+        return Err(ApiError::forbidden());
+    }
+    let command = ServiceInstanceDelete {
+        jwt_id: claims.jwt_id,
+        organization_id: claims.organization_id,
+        project_id: claims.project_id,
+        service_instance_id: claims.service_instance_id,
+        principal_id: claims.subject,
+        generation: query.generation,
+    };
+    let preparation = state
+        .store
+        .prepare_delete_service_instance(&command)
+        .await?;
+    if preparation.completed {
+        return Ok((
+            StatusCode::OK,
+            Json(ReconcileResponse {
+                operation_id: preparation.operation_id,
+                status: preparation.status,
+            }),
+        ));
+    }
+
+    state
+        .livekit
+        .delete_rooms(&preparation.provider_room_names)
+        .await
+        .map_err(|error| ApiError::dependency(error.to_string()))?;
+    let outcome = state
+        .store
+        .complete_delete_service_instance(&command, preparation.operation_id)
+        .await?;
+    let response_status = if outcome.completed_now {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        response_status,
+        Json(ReconcileResponse {
+            operation_id: outcome.operation_id,
+            status: outcome.status,
+        }),
+    ))
+}
+
+fn provider_idempotency_key(headers: &HeaderMap) -> Result<Uuid, ApiError> {
+    headers
+        .get(&IDEMPOTENCY_KEY_HEADER)
+        .ok_or_else(|| ApiError::bad_request("idempotency-key header is required"))?
+        .to_str()
+        .map_err(|_| ApiError::bad_request("idempotency-key header is invalid"))?
+        .parse::<Uuid>()
+        .map_err(|_| ApiError::bad_request("idempotency-key must be a UUID"))
 }
 
 async fn create_ticket(
@@ -585,10 +733,40 @@ struct ReconcileRequest {
     spec: Value,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeleteServiceInstanceQuery {
+    generation: i64,
+}
+
 #[derive(Serialize)]
 struct ReconcileResponse {
     operation_id: Uuid,
     status: ServiceInstanceStatus,
+}
+
+#[derive(Debug, Serialize)]
+struct ServiceOverviewResponse {
+    measured_at: chrono::DateTime<Utc>,
+    active_rooms: u64,
+    concurrent_connections: u64,
+    sfu_participants: u64,
+    p2p_connections: u64,
+    ingress_bytes: i64,
+    egress_bytes: i64,
+    transferred_bytes: i64,
+    turn_allocations: Option<u64>,
+    endpoints: ServiceEndpoints,
+    room_limit: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct ServiceEndpoints {
+    api: Vec<String>,
+    signaling: Vec<String>,
+    livekit: Vec<String>,
+    stun: Vec<String>,
+    turn: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -679,13 +857,16 @@ const fn default_true() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, time::Duration};
+    use std::{collections::BTreeSet, env, time::Duration};
 
     use axum::{
         body::{Body, to_bytes},
         http::{Request, StatusCode, header::AUTHORIZATION},
     };
-    use flow_auth::{PROVIDER_RECONCILE_ACTION, PrincipalAuthenticator, ProviderClaims};
+    use flow_auth::{
+        PROVIDER_DELETE_ACTION, PROVIDER_RECONCILE_ACTION, PrincipalAuthenticator, ProviderClaims,
+    };
+    use flow_domain::PrincipalContext;
     use flow_livekit::LiveKitClient;
     use flow_store::PgStore;
     use flow_turn::TurnCredentialIssuer;
@@ -694,7 +875,11 @@ mod tests {
     use tower::ServiceExt;
     use uuid::Uuid;
 
-    use super::{AppState, RoomConnection, router, signaling_room_urls};
+    use super::{
+        AppState, RequestContext, RoomConnection, ServiceEndpoints, ServiceOverviewResponse,
+        router, signaling_room_urls,
+    };
+    use crate::coturn_metrics::CoturnMetricsClient;
 
     const PRIVATE_KEY: &[u8] = br"-----BEGIN PRIVATE KEY-----
 MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
@@ -758,6 +943,62 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
             "wss://flow-c.example.test/v1/signal/room"
         );
         assert!(rendered.get("signaling_url").is_none());
+    }
+
+    #[test]
+    fn service_overview_shape_keeps_unlimited_rooms_explicit() {
+        let rendered = serde_json::to_value(ServiceOverviewResponse {
+            measured_at: chrono::Utc::now(),
+            active_rooms: 3,
+            concurrent_connections: 8,
+            sfu_participants: 5,
+            p2p_connections: 3,
+            ingress_bytes: 120,
+            egress_bytes: 80,
+            transferred_bytes: 200,
+            turn_allocations: None,
+            endpoints: ServiceEndpoints {
+                api: vec!["https://flow.example.test".into()],
+                signaling: vec!["wss://flow.example.test".into()],
+                livekit: vec!["wss://rtc.example.test".into()],
+                stun: vec!["stun:turn.example.test:3478".into()],
+                turn: vec!["turn:turn.example.test:3478?transport=udp".into()],
+            },
+            room_limit: None,
+        })
+        .unwrap();
+        assert_eq!(rendered["active_rooms"], 3);
+        assert_eq!(rendered["transferred_bytes"], 200);
+        assert!(rendered["room_limit"].is_null());
+        assert!(rendered["turn_allocations"].is_null());
+        assert_eq!(
+            rendered["endpoints"]["stun"][0],
+            "stun:turn.example.test:3478"
+        );
+    }
+
+    #[test]
+    fn service_overview_requires_metrics_permission() {
+        let now = chrono::Utc::now();
+        let mut context = RequestContext {
+            principal: PrincipalContext {
+                organization_id: Uuid::new_v4(),
+                project_id: Uuid::new_v4(),
+                service_instance_id: Uuid::new_v4(),
+                principal_id: Uuid::new_v4(),
+                permissions: BTreeSet::new(),
+                issued_at: now,
+                expires_at: now + chrono::Duration::minutes(5),
+                token_id: Uuid::new_v4(),
+            },
+            request_id: Uuid::now_v7().to_string(),
+        };
+        assert!(context.require("flow.metrics.read").is_err());
+        context
+            .principal
+            .permissions
+            .insert("flow.metrics.read".into());
+        assert!(context.require("flow.metrics.read").is_ok());
     }
 
     #[tokio::test]
@@ -830,6 +1071,78 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
         assert_eq!(stale_response.status(), StatusCode::CONFLICT);
     }
 
+    #[tokio::test]
+    async fn provider_delete_route_enforces_query_action_and_idempotency() {
+        let Some(state) = test_state().await else {
+            return;
+        };
+        let scope = CommandScope {
+            principal_id: Uuid::new_v4(),
+            organization_id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            service_instance_id: Uuid::new_v4(),
+        };
+        let body = json!({"generation": 1, "name": "delete-route-test", "spec": {}});
+        let (reconcile_token, reconcile_jwt_id) = provider_token(scope, 1);
+        assert_eq!(
+            send_reconcile(
+                &state,
+                scope.service_instance_id,
+                &reconcile_token,
+                reconcile_jwt_id,
+                &body,
+            )
+            .await
+            .status(),
+            StatusCode::ACCEPTED
+        );
+
+        let (delete_token, delete_jwt_id) =
+            provider_token_for_action(scope, 2, PROVIDER_DELETE_ACTION);
+        let first = send_delete(
+            &state,
+            scope.service_instance_id,
+            2,
+            &delete_token,
+            delete_jwt_id,
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+        let first_body = response_json(first).await;
+        assert_eq!(first_body["status"]["phase"], "deleted");
+        assert_eq!(first_body["status"]["observed_generation"], 2);
+
+        let duplicate = send_delete(
+            &state,
+            scope.service_instance_id,
+            2,
+            &delete_token,
+            delete_jwt_id,
+        )
+        .await;
+        assert_eq!(duplicate.status(), StatusCode::OK);
+        assert_eq!(response_json(duplicate).await, first_body);
+
+        let query_mismatch = send_delete(
+            &state,
+            scope.service_instance_id,
+            3,
+            &delete_token,
+            delete_jwt_id,
+        )
+        .await;
+        assert_eq!(query_mismatch.status(), StatusCode::FORBIDDEN);
+        let wrong_action = send_delete(
+            &state,
+            scope.service_instance_id,
+            1,
+            &reconcile_token,
+            reconcile_jwt_id,
+        )
+        .await;
+        assert_eq!(wrong_action.status(), StatusCode::UNAUTHORIZED);
+    }
+
     async fn test_state() -> Option<AppState> {
         let Ok(database_url) = env::var("TEST_DATABASE_URL") else {
             eprintln!("TEST_DATABASE_URL is not set; skipping API integration test");
@@ -858,6 +1171,11 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
                 "route-test-livekit-secret-at-least-32-bytes",
             )
             .unwrap(),
+            coturn_metrics: CoturnMetricsClient::default(),
+            api_urls: vec![
+                "https://flow-a.example.test".into(),
+                "https://flow-b.example.test".into(),
+            ],
             livekit_ws_urls: vec![
                 "wss://rtc-a.example.test".into(),
                 "wss://rtc-b.example.test".into(),
@@ -877,6 +1195,14 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
     }
 
     fn provider_token(scope: CommandScope, generation: i64) -> (String, Uuid) {
+        provider_token_for_action(scope, generation, PROVIDER_RECONCILE_ACTION)
+    }
+
+    fn provider_token_for_action(
+        scope: CommandScope,
+        generation: i64,
+        action: &str,
+    ) -> (String, Uuid) {
         let now = chrono::Utc::now().timestamp();
         let jwt_id = Uuid::now_v7();
         let claims = ProviderClaims {
@@ -886,7 +1212,7 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
             organization_id: scope.organization_id,
             project_id: scope.project_id,
             service_instance_id: scope.service_instance_id,
-            action: PROVIDER_RECONCILE_ACTION.into(),
+            action: action.into(),
             generation,
             jwt_id,
             issued_at: now,
@@ -904,6 +1230,27 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
             .unwrap(),
             jwt_id,
         )
+    }
+
+    async fn send_delete(
+        state: &AppState,
+        service_instance_id: Uuid,
+        generation: i64,
+        token: &str,
+        jwt_id: Uuid,
+    ) -> axum::response::Response {
+        router(state.clone())
+            .oneshot(
+                Request::delete(format!(
+                    "/internal/v1/service-instances/{service_instance_id}?generation={generation}"
+                ))
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .header("idempotency-key", jwt_id.to_string())
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap()
     }
 
     async fn send_reconcile(

@@ -23,7 +23,10 @@ use flow_auth::{
     PRINCIPAL_HEADER, PRINCIPAL_SIGNATURE_HEADER, PRINCIPAL_TIMESTAMP_HEADER,
     PrincipalAuthenticator,
 };
-use flow_domain::{NewAuditEvent, NewUsageEvent, PrincipalContext, RoomState, SessionMode};
+use flow_domain::{
+    NewAuditEvent, NewSignalingConnection, NewUsageEvent, PrincipalContext, RoomState,
+    SIGNALING_HEARTBEAT_INTERVAL, SessionMode,
+};
 use flow_store::PgStore;
 use futures_util::{SinkExt, StreamExt};
 use redis::{
@@ -258,6 +261,27 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid) {
     };
 
     let connection_id = Uuid::now_v7();
+    if let Err(error) = state
+        .store
+        .open_signaling_connection(NewSignalingConnection {
+            connection_id,
+            organization_id: principal.organization_id,
+            project_id: principal.project_id,
+            service_instance_id: principal.service_instance_id,
+            room_id,
+            principal_id: principal.principal_id,
+        })
+        .await
+    {
+        warn!(%error, "failed to persist signaling connection");
+        send_protocol_error(
+            &mut socket,
+            "signaling_unavailable",
+            "signaling backend is unavailable",
+        )
+        .await;
+        return;
+    }
     let authenticated = ServerFrame::Authenticated {
         connection_id,
         room_id,
@@ -267,6 +291,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid) {
         .await
         .is_err()
     {
+        close_signaling_connection(&state.store, connection_id).await;
         return;
     }
     persist_open_audit(&state.store, &principal, room_id, connection_id).await;
@@ -278,8 +303,10 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid) {
         channel,
         principal.clone(),
         connection_id,
+        state.store.clone(),
     )
     .await;
+    close_signaling_connection(&state.store, connection_id).await;
     persist_connection_usage(
         &state.store,
         &principal,
@@ -339,6 +366,7 @@ async fn relay(
     channel: String,
     principal: PrincipalContext,
     connection_id: Uuid,
+    store: PgStore,
 ) -> u64 {
     let (mut sender, mut receiver) = socket.split();
     let mut redis_messages = subscriber.on_message();
@@ -348,6 +376,9 @@ async fn relay(
         .unwrap_or(Duration::ZERO);
     let authentication_expiry = tokio::time::sleep(auth_remaining);
     tokio::pin!(authentication_expiry);
+    let mut heartbeat = tokio::time::interval(SIGNALING_HEARTBEAT_INTERVAL);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    heartbeat.tick().await;
     loop {
         tokio::select! {
             () = &mut authentication_expiry => {
@@ -357,6 +388,19 @@ async fn relay(
                 };
                 let _ = send_frame_to_sink(&mut sender, &frame).await;
                 break;
+            }
+            _ = heartbeat.tick() => {
+                match store.heartbeat_signaling_connection(connection_id).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        warn!(%connection_id, "signaling connection heartbeat was not persisted");
+                        break;
+                    }
+                    Err(error) => {
+                        warn!(%error, %connection_id, "failed to persist signaling heartbeat");
+                        break;
+                    }
+                }
             }
             incoming = receiver.next() => {
                 let Some(incoming) = incoming else {
@@ -435,6 +479,12 @@ async fn relay(
         }
     }
     count
+}
+
+async fn close_signaling_connection(store: &PgStore, connection_id: Uuid) {
+    if let Err(error) = store.close_signaling_connection(connection_id).await {
+        warn!(%error, %connection_id, "failed to close signaling connection record");
+    }
 }
 
 fn parse_signal(text: &str) -> Result<ClientSignal, String> {

@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fmt, str::FromStr};
+use std::{collections::BTreeSet, fmt, str::FromStr, time::Duration};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -9,6 +9,9 @@ use uuid::Uuid;
 const MAX_EXTERNAL_ID_LEN: usize = 128;
 const MAX_QUEUE_NAME_LEN: usize = 96;
 const MAX_ROOM_NAME_LEN: usize = 160;
+
+pub const SIGNALING_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+pub const SIGNALING_CONNECTION_STALE_AFTER: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrincipalContext {
@@ -305,6 +308,16 @@ pub struct NewUsageEvent {
 }
 
 #[derive(Debug, Clone)]
+pub struct NewSignalingConnection {
+    pub connection_id: Uuid,
+    pub organization_id: Uuid,
+    pub project_id: Uuid,
+    pub service_instance_id: Uuid,
+    pub room_id: Uuid,
+    pub principal_id: Uuid,
+}
+
+#[derive(Debug, Clone)]
 pub struct ServiceInstanceReconcile {
     pub jwt_id: Uuid,
     pub organization_id: Uuid,
@@ -335,9 +348,35 @@ impl ServiceInstanceReconcile {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ServiceInstanceDelete {
+    pub jwt_id: Uuid,
+    pub organization_id: Uuid,
+    pub project_id: Uuid,
+    pub service_instance_id: Uuid,
+    pub principal_id: Uuid,
+    pub generation: i64,
+}
+
+impl ServiceInstanceDelete {
+    /// Validates a provider delete command before persistence or provider side effects.
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.generation <= 0 {
+            return Err(ValidationError::OutOfRange {
+                field: "generation",
+                min: 1,
+                max: i64::MAX,
+            });
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceInstancePhase {
+    Deleting,
+    Deleted,
     Ready,
 }
 
@@ -354,6 +393,24 @@ impl ServiceInstanceStatus {
     pub const fn ready(observed_generation: i64, operation_id: Uuid) -> Self {
         Self {
             phase: ServiceInstancePhase::Ready,
+            observed_generation,
+            operation_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn deleting(observed_generation: i64, operation_id: Uuid) -> Self {
+        Self {
+            phase: ServiceInstancePhase::Deleting,
+            observed_generation,
+            operation_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn deleted(observed_generation: i64, operation_id: Uuid) -> Self {
+        Self {
+            phase: ServiceInstancePhase::Deleted,
             observed_generation,
             operation_id,
         }
