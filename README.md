@@ -102,8 +102,10 @@ Its security requirement models all three `X-Flow-*` headers as mandatory.
 | `POST /v1/turn-credentials` | `flow.turn.issue` | Issue short-lived coturn REST credentials |
 
 All public REST requests and P2P WebSocket upgrade attempts share a Redis-backed
-source-IP token bucket across every API and signaling replica. The default is
-20 requests per second with a burst of 40. Successful REST responses expose
+deployment source-IP ceiling across every API and signaling replica.
+Authenticated calls additionally use a `service instance + source IP` bucket
+configured in the HeteroCloud console. Services default to 20 requests per
+second with a burst of 40. Successful REST responses expose
 `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`; rejected
 requests return `429` with the same fields and `Retry-After`. Redis failure is
 fail-closed with `503`, and readiness also verifies the limiter backend.

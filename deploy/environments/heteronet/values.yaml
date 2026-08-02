@@ -14,11 +14,12 @@ principalAuth:
   issuer: heterocloud
   audience: heterocloud-flow-data
 
-# The API and signaling listener trust forwarding metadata only from the three
-# managed Caddy nodes. The distributed Redis bucket is shared by all replicas.
+# This deployment ceiling is shared by all replicas. Each authenticated Flow
+# service applies its lower console-configured bucket in addition to this one.
+# Forwarding metadata is trusted only from the three managed Caddy nodes.
 rateLimit:
-  requestsPerSecond: 20
-  burst: 40
+  requestsPerSecond: 1000
+  burst: 5000
   trustedProxyCidrs:
     - 10.250.0.4/32
     - 10.250.0.5/32
@@ -65,7 +66,7 @@ livekit:
   replicaCount: 3
   image:
     repository: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-livekit
-    tag: "0.1.7"
+    tag: "0.1.8"
   publicUrls:
     - wss://flow.heterocloud.mizuame.app
   signal:

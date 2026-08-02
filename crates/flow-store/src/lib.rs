@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use flow_domain::{
     FlowRoom, MatchAssignment, MatchCandidate, MatchmakingTicket, NewAuditEvent, NewRoom,
     NewSignalingConnection, NewTicket, NewUsageEvent, ReconcileOutcome, RoomState,
-    ServiceInstanceDelete, ServiceInstanceReconcile, ServiceInstanceStatus, SessionMode,
-    TicketState, ValidationError, room_limit_from_spec,
+    ServiceInstanceDelete, ServiceInstanceReconcile, ServiceInstanceStatus, ServiceRateLimit,
+    SessionMode, TicketState, ValidationError, rate_limit_from_spec, room_limit_from_spec,
 };
 use serde_json::Value;
 use sqlx::{
@@ -87,25 +87,36 @@ impl PgStore {
         project_id: Uuid,
         service_instance_id: Uuid,
     ) -> Result<bool, StoreError> {
-        sqlx::query_scalar(
+        Ok(self
+            .ready_service_rate_limit(organization_id, project_id, service_instance_id)
+            .await?
+            .is_some())
+    }
+
+    pub async fn ready_service_rate_limit(
+        &self,
+        organization_id: Uuid,
+        project_id: Uuid,
+        service_instance_id: Uuid,
+    ) -> Result<Option<ServiceRateLimit>, StoreError> {
+        let spec = sqlx::query_scalar::<_, Value>(
             r"
-            SELECT EXISTS (
-                SELECT 1
-                FROM flow_service_instances
-                WHERE id = $1
-                  AND organization_id = $2
-                  AND project_id = $3
-                  AND observed_generation = desired_generation
-                  AND status ->> 'phase' = 'ready'
-            )
+            SELECT desired_spec
+            FROM flow_service_instances
+            WHERE id = $1
+              AND organization_id = $2
+              AND project_id = $3
+              AND observed_generation = desired_generation
+              AND status ->> 'phase' = 'ready'
             ",
         )
         .bind(service_instance_id)
         .bind(organization_id)
         .bind(project_id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(Into::into)
+        .fetch_optional(&self.pool)
+        .await?;
+        spec.map(|spec| rate_limit_from_spec(&spec).map_err(StoreError::from))
+            .transpose()
     }
 
     pub async fn reconcile_service_instance(

@@ -94,6 +94,43 @@ async fn reconcile_is_idempotent_and_rejects_replay_and_stale_generations() {
 }
 
 #[tokio::test]
+async fn ready_service_rate_limit_tracks_reconciled_spec() {
+    let _guard = DATABASE_TEST_LOCK.lock().await;
+    let Some(store) = test_store(4).await else {
+        return;
+    };
+    let scope = Scope {
+        organization_id: Uuid::new_v4(),
+        project_id: Uuid::new_v4(),
+        service_instance_id: Uuid::new_v4(),
+    };
+    store
+        .reconcile_service_instance(reconcile_command(
+            scope,
+            1,
+            Uuid::new_v4(),
+            "rate-limited-flow",
+            json!({
+                "rate_limit": {"requests_per_second": 75, "burst": 150}
+            }),
+        ))
+        .await
+        .unwrap();
+
+    let policy = store
+        .ready_service_rate_limit(
+            scope.organization_id,
+            scope.project_id,
+            scope.service_instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(policy.requests_per_second, 75);
+    assert_eq!(policy.burst, 150);
+}
+
+#[tokio::test]
 async fn p2p_match_is_claimed_and_completed() {
     let _guard = DATABASE_TEST_LOCK.lock().await;
     let Some(store) = test_store(4).await else {

@@ -16,6 +16,7 @@ use redis::{
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 
@@ -25,7 +26,7 @@ local capacity = tonumber(ARGV[2])
 local current_time = redis.call('TIME')
 local now_ms = (tonumber(current_time[1]) * 1000) + math.floor(tonumber(current_time[2]) / 1000)
 local state = redis.call('HMGET', KEYS[1], 'tokens', 'updated_at_ms')
-local tokens = tonumber(state[1]) or capacity
+local tokens = math.min(capacity, tonumber(state[1]) or capacity)
 local updated_at_ms = tonumber(state[2]) or now_ms
 
 if now_ms > updated_at_ms then
@@ -196,15 +197,16 @@ impl RateLimitPolicy {
         Ok(policy)
     }
 
-    /// Loads the public API policy. Defaults to 20 requests per second with a burst of 40.
+    /// Loads the deployment source-IP ceiling. Defaults to 1000 requests per
+    /// second with a burst of 5000; lower service policies are supplied per call.
     ///
     /// # Errors
     ///
     /// Returns an error when either value is outside the supported range.
     pub fn from_env() -> Result<Self> {
         Self::new(
-            parse_env_or("FLOW_PUBLIC_RATE_LIMIT_RPS", 20)?,
-            parse_env_or("FLOW_PUBLIC_RATE_LIMIT_BURST", 40)?,
+            parse_env_or("FLOW_PUBLIC_RATE_LIMIT_RPS", 1_000)?,
+            parse_env_or("FLOW_PUBLIC_RATE_LIMIT_BURST", 5_000)?,
         )
     }
 
@@ -253,20 +255,40 @@ impl IpRateLimiter {
     /// Returns an error when the Redis primary is unavailable. The cached
     /// connection is discarded and Sentinel is consulted once before failing.
     pub async fn check(&self, address: IpAddr) -> Result<RateLimitDecision> {
-        let key = rate_limit_key(address);
+        self.check_key(system_rate_limit_key(address), self.policy)
+            .await
+    }
+
+    /// Consumes one token from a service-specific source-IP bucket.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the Redis primary is unavailable. The cached
+    /// connection is discarded and Sentinel is consulted once before failing.
+    pub async fn check_service(
+        &self,
+        service_instance_id: Uuid,
+        address: IpAddr,
+        policy: RateLimitPolicy,
+    ) -> Result<RateLimitDecision> {
+        self.check_key(service_rate_limit_key(service_instance_id, address), policy)
+            .await
+    }
+
+    async fn check_key(&self, key: String, policy: RateLimitPolicy) -> Result<RateLimitDecision> {
         for attempt in 0..2 {
             let mut connection = self.connection().await?;
             let result = Script::new(TOKEN_BUCKET_SCRIPT)
                 .key(&key)
-                .arg(self.policy.requests_per_second)
-                .arg(self.policy.burst)
+                .arg(policy.requests_per_second)
+                .arg(policy.burst)
                 .invoke_async::<(i64, i64, i64, i64)>(&mut connection)
                 .await;
             match result {
                 Ok((allowed, remaining, retry_after_ms, reset_after_ms)) => {
                     return Ok(RateLimitDecision {
                         allowed: allowed == 1,
-                        limit: self.policy.burst,
+                        limit: policy.burst,
                         remaining: nonnegative_u32(remaining),
                         retry_after_seconds: milliseconds_to_seconds(retry_after_ms),
                         reset_after_seconds: milliseconds_to_seconds(reset_after_ms),
@@ -394,9 +416,20 @@ fn normalize_ip(address: IpAddr) -> IpAddr {
     }
 }
 
-fn rate_limit_key(address: IpAddr) -> String {
+fn system_rate_limit_key(address: IpAddr) -> String {
+    format!("flow:rate-limit:v2:system:{}", ip_key(address))
+}
+
+fn service_rate_limit_key(service_instance_id: Uuid, address: IpAddr) -> String {
+    format!(
+        "flow:rate-limit:v2:service:{service_instance_id}:{}",
+        ip_key(address)
+    )
+}
+
+fn ip_key(address: IpAddr) -> String {
     let digest = Sha256::digest(normalize_ip(address).to_string().as_bytes());
-    format!("flow:rate-limit:v1:{}", URL_SAFE_NO_PAD.encode(digest))
+    URL_SAFE_NO_PAD.encode(digest)
 }
 
 fn nonnegative_u32(value: i64) -> u32 {
@@ -438,7 +471,9 @@ mod tests {
 
     use http::{HeaderMap, HeaderValue};
 
-    use super::{TrustedProxies, milliseconds_to_seconds, rate_limit_key};
+    use super::{
+        TrustedProxies, milliseconds_to_seconds, service_rate_limit_key, system_rate_limit_key,
+    };
 
     #[test]
     fn untrusted_peer_cannot_spoof_forwarded_address() {
@@ -480,8 +515,23 @@ mod tests {
     fn mapped_ipv4_addresses_share_one_private_key() {
         let ipv4 = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 8));
         let mapped = IpAddr::V6(Ipv4Addr::new(203, 0, 113, 8).to_ipv6_mapped());
-        assert_eq!(rate_limit_key(ipv4), rate_limit_key(mapped));
-        assert!(!rate_limit_key(ipv4).contains("203.0.113.8"));
+        assert_eq!(system_rate_limit_key(ipv4), system_rate_limit_key(mapped));
+        assert!(!system_rate_limit_key(ipv4).contains("203.0.113.8"));
+    }
+
+    #[test]
+    fn service_buckets_are_isolated_from_each_other_and_the_system_bucket() {
+        let address = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 8));
+        let first = uuid::Uuid::new_v4();
+        let second = uuid::Uuid::new_v4();
+        assert_ne!(
+            service_rate_limit_key(first, address),
+            service_rate_limit_key(second, address)
+        );
+        assert_ne!(
+            service_rate_limit_key(first, address),
+            system_rate_limit_key(address)
+        );
     }
 
     #[test]

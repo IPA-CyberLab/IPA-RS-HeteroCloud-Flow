@@ -87,8 +87,9 @@ overlay sets:
 - Redis primary plus two replicas with persistence disabled, which uses
   `emptyDir` and requires no `StorageClass`
 - one stable HTTPS/WSS public endpoint while backend listeners remain HTTP
-- a Redis-backed source-IP token bucket shared by API and signaling replicas,
-  with forwarding metadata trusted only from the three managed Caddy addresses
+- a Redis-backed deployment source-IP ceiling shared by API and signaling
+  replicas, plus lower per-service buckets managed from HeteroCloud; forwarding
+  metadata is trusted only from the three managed Caddy addresses
 - immutable Redis and Sentinel image digests; LiveKit `v1.13.5` and coturn
   `4.16.0`
 

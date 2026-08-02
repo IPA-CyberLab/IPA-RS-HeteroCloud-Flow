@@ -1,6 +1,6 @@
 use std::{
     env,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     process::ExitCode,
     str::FromStr,
     sync::Arc,
@@ -12,7 +12,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{
-        ConnectInfo, Path, State,
+        ConnectInfo, Extension, Path, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap, HeaderValue, Request, StatusCode},
@@ -52,6 +52,9 @@ struct AppState {
     trusted_proxies: TrustedProxies,
     auth_timeout: Duration,
 }
+
+#[derive(Clone, Copy)]
+struct ClientIp(IpAddr);
 
 struct Config {
     bind_addr: SocketAddr,
@@ -148,7 +151,7 @@ async fn ready(State(state): State<AppState>) -> Result<Json<Value>, StatusCode>
 
 async fn enforce_ip_rate_limit(
     State(state): State<AppState>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Response {
     let peer = request
@@ -192,6 +195,7 @@ async fn enforce_ip_rate_limit(
         return response;
     }
 
+    request.extensions_mut().insert(ClientIp(client_ip));
     let mut response = next.run(request).await;
     insert_rate_limit_headers(&mut response, decision);
     response
@@ -216,15 +220,16 @@ fn insert_numeric_header(response: &mut Response, name: &'static str, value: u64
 async fn signal_upgrade(
     State(state): State<AppState>,
     Path(room_id): Path<Uuid>,
+    Extension(client_ip): Extension<ClientIp>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
     upgrade
         .max_message_size(64 * 1024)
         .max_frame_size(64 * 1024)
-        .on_upgrade(move |socket| handle_socket(socket, state, room_id))
+        .on_upgrade(move |socket| handle_socket(socket, state, room_id, client_ip.0))
 }
 
-async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid) {
+async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid, client_ip: IpAddr) {
     let authentication = tokio::time::timeout(
         state.auth_timeout,
         authenticate(&mut socket, &state.principal_auth),
@@ -255,17 +260,17 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid) {
         .await;
         return;
     }
-    match state
+    let service_rate_limit = match state
         .store
-        .service_instance_is_ready(
+        .ready_service_rate_limit(
             principal.organization_id,
             principal.project_id,
             principal.service_instance_id,
         )
         .await
     {
-        Ok(true) => {}
-        Ok(false) => {
+        Ok(Some(rate_limit)) => rate_limit,
+        Ok(None) => {
             send_protocol_error(
                 &mut socket,
                 "service_instance_unavailable",
@@ -284,6 +289,47 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid) {
             .await;
             return;
         }
+    };
+    let service_policy = match RateLimitPolicy::new(
+        service_rate_limit.requests_per_second,
+        service_rate_limit.burst,
+    ) {
+        Ok(policy) => policy,
+        Err(error) => {
+            warn!(%error, service_instance_id = %principal.service_instance_id, "invalid service IP rate limit");
+            send_protocol_error(
+                &mut socket,
+                "signaling_unavailable",
+                "service admission policy is unavailable",
+            )
+            .await;
+            return;
+        }
+    };
+    let rate_limit = match state
+        .rate_limiter
+        .check_service(principal.service_instance_id, client_ip, service_policy)
+        .await
+    {
+        Ok(decision) => decision,
+        Err(error) => {
+            warn!(%error, %client_ip, service_instance_id = %principal.service_instance_id, "service IP rate-limit backend is unavailable");
+            send_protocol_error(
+                &mut socket,
+                "signaling_unavailable",
+                "request admission service is unavailable",
+            )
+            .await;
+            return;
+        }
+    };
+    if !rate_limit.allowed {
+        let message = format!(
+            "source IP request limit exceeded; retry after {} second(s)",
+            rate_limit.retry_after_seconds.max(1)
+        );
+        send_protocol_error(&mut socket, "rate_limit_exceeded", &message).await;
+        return;
     }
     let room = match state
         .store

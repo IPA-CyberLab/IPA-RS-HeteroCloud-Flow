@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "flow-api"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "axum",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "flow-auth"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -789,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "flow-domain"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "chrono",
  "serde",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "flow-livekit"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "chrono",
  "flow-domain",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "flow-matchmaker"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "axum",
@@ -831,7 +831,7 @@ dependencies = [
 
 [[package]]
 name = "flow-rate-limit"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -840,11 +840,12 @@ dependencies = [
  "redis",
  "sha2 0.10.9",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
 name = "flow-signaling"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "axum",
@@ -867,7 +868,7 @@ dependencies = [
 
 [[package]]
 name = "flow-store"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "chrono",
  "flow-domain",
@@ -880,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "flow-turn"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "base64 0.22.1",
  "chrono",

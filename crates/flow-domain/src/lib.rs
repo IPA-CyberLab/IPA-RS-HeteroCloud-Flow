@@ -13,6 +13,10 @@ const MAX_ROOM_NAME_LEN: usize = 160;
 
 pub const DEFAULT_MAX_ROOMS: u32 = 100;
 pub const MAX_ROOMS: u32 = 1_000_000;
+pub const DEFAULT_RATE_LIMIT_REQUESTS_PER_SECOND: u32 = 20;
+pub const DEFAULT_RATE_LIMIT_BURST: u32 = 40;
+pub const MAX_RATE_LIMIT_REQUESTS_PER_SECOND: u32 = 1_000;
+pub const MAX_RATE_LIMIT_BURST: u32 = 5_000;
 
 pub const SIGNALING_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 pub const SIGNALING_CONNECTION_STALE_AFTER: Duration = Duration::from_secs(45);
@@ -350,8 +354,53 @@ impl ServiceInstanceReconcile {
         validate_display_name("name", &self.name, 120)?;
         ensure_json_object("spec", &self.spec)?;
         room_limit_from_spec(&self.spec)?;
+        rate_limit_from_spec(&self.spec)?;
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ServiceRateLimit {
+    pub requests_per_second: u32,
+    pub burst: u32,
+}
+
+impl Default for ServiceRateLimit {
+    fn default() -> Self {
+        Self {
+            requests_per_second: DEFAULT_RATE_LIMIT_REQUESTS_PER_SECOND,
+            burst: DEFAULT_RATE_LIMIT_BURST,
+        }
+    }
+}
+
+/// Returns the source-IP token bucket configured for a Flow service.
+///
+/// Specs created before service-level limits were introduced use the bounded
+/// default. A present `rate_limit` object must contain both supported fields.
+///
+/// # Errors
+///
+/// Returns [`ValidationError`] when the object is malformed or either value is
+/// outside its supported range.
+pub fn rate_limit_from_spec(spec: &Value) -> Result<ServiceRateLimit, ValidationError> {
+    ensure_json_object("spec", spec)?;
+    let Some(rate_limit) = spec.get("rate_limit") else {
+        return Ok(ServiceRateLimit::default());
+    };
+    let Some(rate_limit) = rate_limit.as_object() else {
+        return Err(ValidationError::ExpectedObject {
+            field: "rate_limit",
+        });
+    };
+    Ok(ServiceRateLimit {
+        requests_per_second: bounded_u32_field(
+            rate_limit,
+            "requests_per_second",
+            MAX_RATE_LIMIT_REQUESTS_PER_SECOND,
+        )?,
+        burst: bounded_u32_field(rate_limit, "burst", MAX_RATE_LIMIT_BURST)?,
+    })
 }
 
 /// Returns the configured concurrent room limit from a Flow service spec.
@@ -532,6 +581,33 @@ fn ensure_json_object(field: &'static str, value: &Value) -> Result<(), Validati
     }
 }
 
+fn bounded_u32_field(
+    object: &serde_json::Map<String, Value>,
+    field: &'static str,
+    max: u32,
+) -> Result<u32, ValidationError> {
+    let value = object
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or(ValidationError::OutOfRange {
+            field,
+            min: 1,
+            max: i64::from(max),
+        })?;
+    if !(1..=u64::from(max)).contains(&value) {
+        return Err(ValidationError::OutOfRange {
+            field,
+            min: 1,
+            max: i64::from(max),
+        });
+    }
+    u32::try_from(value).map_err(|_| ValidationError::OutOfRange {
+        field,
+        min: 1,
+        max: i64::from(max),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -541,8 +617,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        DEFAULT_MAX_ROOMS, NewTicket, PrincipalContext, ServiceInstanceReconcile, SessionMode,
-        ValidationError, room_limit_from_spec,
+        DEFAULT_MAX_ROOMS, DEFAULT_RATE_LIMIT_BURST, DEFAULT_RATE_LIMIT_REQUESTS_PER_SECOND,
+        NewTicket, PrincipalContext, ServiceInstanceReconcile, ServiceRateLimit, SessionMode,
+        ValidationError, rate_limit_from_spec, room_limit_from_spec,
     };
 
     #[test]
@@ -563,6 +640,35 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn service_rate_limit_defaults_and_validates_bounds() {
+        assert_eq!(
+            rate_limit_from_spec(&json!({})).unwrap(),
+            ServiceRateLimit {
+                requests_per_second: DEFAULT_RATE_LIMIT_REQUESTS_PER_SECOND,
+                burst: DEFAULT_RATE_LIMIT_BURST,
+            }
+        );
+        assert_eq!(
+            rate_limit_from_spec(&json!({
+                "rate_limit": {"requests_per_second": 75, "burst": 150}
+            }))
+            .unwrap(),
+            ServiceRateLimit {
+                requests_per_second: 75,
+                burst: 150,
+            }
+        );
+        for invalid in [
+            json!({"rate_limit": null}),
+            json!({"rate_limit": {"requests_per_second": 0, "burst": 40}}),
+            json!({"rate_limit": {"requests_per_second": 20}}),
+            json!({"rate_limit": {"requests_per_second": 20, "burst": 5001}}),
+        ] {
+            assert!(rate_limit_from_spec(&invalid).is_err());
+        }
     }
 
     #[test]

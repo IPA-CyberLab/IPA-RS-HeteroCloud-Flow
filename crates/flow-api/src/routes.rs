@@ -17,7 +17,7 @@ use flow_domain::{
     ServiceInstanceReconcile, ServiceInstanceStatus, SessionMode,
 };
 use flow_livekit::LiveKitClient;
-use flow_rate_limit::{IpRateLimiter, RateLimitDecision, TrustedProxies};
+use flow_rate_limit::{IpRateLimiter, RateLimitDecision, RateLimitPolicy, TrustedProxies};
 use flow_store::PgStore;
 use flow_turn::{TurnCredentialIssuer, TurnCredentials};
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,9 @@ pub struct AppState {
     pub rate_limiter: Arc<IpRateLimiter>,
     pub trusted_proxies: TrustedProxies,
 }
+
+#[derive(Clone)]
+struct AdmittedPrincipal(PrincipalContext);
 
 pub fn router(state: AppState) -> Router {
     let api_document = public_openapi(&state.api_urls);
@@ -103,7 +106,7 @@ async fn ready(State(state): State<AppState>) -> Result<impl IntoResponse, ApiEr
 
 async fn enforce_ip_rate_limit(
     State(state): State<AppState>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Response {
     let peer = request
@@ -111,25 +114,77 @@ async fn enforce_ip_rate_limit(
         .get::<ConnectInfo<SocketAddr>>()
         .map_or_else(|| SocketAddr::from(([127, 0, 0, 1], 0)), |value| value.0);
     let client_ip = state.trusted_proxies.client_ip(peer, request.headers());
-    let decision = match state.rate_limiter.check(client_ip).await {
+    let system_decision = match state.rate_limiter.check(client_ip).await {
         Ok(decision) => decision,
         Err(error) => {
             warn!(%error, %client_ip, "IP rate-limit backend is unavailable");
             return ApiError::rate_limit_unavailable().into_response();
         }
     };
-    if !decision.allowed {
-        let mut response = ApiError::rate_limited().into_response();
-        insert_rate_limit_headers(&mut response, decision);
-        let retry_after = decision.retry_after_seconds.max(1).to_string();
-        if let Ok(value) = HeaderValue::from_str(&retry_after) {
-            response.headers_mut().insert("retry-after", value);
+    if !system_decision.allowed {
+        return rate_limited_response(system_decision);
+    }
+
+    let mut effective_decision = system_decision;
+    if let Ok(principal) = state.principal_auth.authenticate_headers(request.headers()) {
+        let service_rate_limit = match state
+            .store
+            .ready_service_rate_limit(
+                principal.organization_id,
+                principal.project_id,
+                principal.service_instance_id,
+            )
+            .await
+        {
+            Ok(rate_limit) => rate_limit,
+            Err(error) => {
+                warn!(%error, %client_ip, "failed to load service IP rate limit");
+                return ApiError::rate_limit_unavailable().into_response();
+            }
+        };
+        if let Some(service_rate_limit) = service_rate_limit {
+            let policy = match RateLimitPolicy::new(
+                service_rate_limit.requests_per_second,
+                service_rate_limit.burst,
+            ) {
+                Ok(policy) => policy,
+                Err(error) => {
+                    warn!(%error, service_instance_id = %principal.service_instance_id, "invalid service IP rate limit");
+                    return ApiError::rate_limit_unavailable().into_response();
+                }
+            };
+            effective_decision = match state
+                .rate_limiter
+                .check_service(principal.service_instance_id, client_ip, policy)
+                .await
+            {
+                Ok(decision) => decision,
+                Err(error) => {
+                    warn!(%error, %client_ip, service_instance_id = %principal.service_instance_id, "service IP rate-limit backend is unavailable");
+                    return ApiError::rate_limit_unavailable().into_response();
+                }
+            };
+            if !effective_decision.allowed {
+                return rate_limited_response(effective_decision);
+            }
+            request
+                .extensions_mut()
+                .insert(AdmittedPrincipal(principal));
         }
-        return response;
     }
 
     let mut response = next.run(request).await;
+    insert_rate_limit_headers(&mut response, effective_decision);
+    response
+}
+
+fn rate_limited_response(decision: RateLimitDecision) -> Response {
+    let mut response = ApiError::rate_limited().into_response();
     insert_rate_limit_headers(&mut response, decision);
+    let retry_after = decision.retry_after_seconds.max(1).to_string();
+    if let Ok(value) = HeaderValue::from_str(&retry_after) {
+        response.headers_mut().insert("retry-after", value);
+    }
     response
 }
 
@@ -989,18 +1044,23 @@ impl FromRequestParts<AppState> for RequestContext {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let principal = state.principal_auth.authenticate_headers(&parts.headers)?;
-        if !state
-            .store
-            .service_instance_is_ready(
-                principal.organization_id,
-                principal.project_id,
-                principal.service_instance_id,
-            )
-            .await?
-        {
-            return Err(ApiError::forbidden());
-        }
+        let principal = if let Some(admitted) = parts.extensions.get::<AdmittedPrincipal>() {
+            admitted.0.clone()
+        } else {
+            let principal = state.principal_auth.authenticate_headers(&parts.headers)?;
+            if !state
+                .store
+                .service_instance_is_ready(
+                    principal.organization_id,
+                    principal.project_id,
+                    principal.service_instance_id,
+                )
+                .await?
+            {
+                return Err(ApiError::forbidden());
+            }
+            principal
+        };
         let request_id = parts
             .headers
             .get(&REQUEST_ID_HEADER)
@@ -1146,7 +1206,7 @@ enum RoomConnection {
     info(
         title = "HeteroCloud Flow Public API",
         version = env!("CARGO_PKG_VERSION"),
-        description = "Public room, matchmaking, participant connection, and TURN credential API. Obtain the three short-lived X-Flow-* header values from HeteroCloud and send all three on every REST request. Public REST calls and P2P WebSocket upgrade attempts share a distributed source-IP token bucket."
+        description = "Public room, matchmaking, participant connection, and TURN credential API. Obtain the three short-lived X-Flow-* header values from HeteroCloud and send all three on every REST request. Every request is subject to a system source-IP ceiling; authenticated requests also share the Flow service's console-configured source-IP token bucket across all API replicas."
     ),
     paths(
         service_overview,
