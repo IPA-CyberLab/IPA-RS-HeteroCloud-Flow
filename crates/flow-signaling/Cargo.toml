@@ -12,6 +12,7 @@ axum.workspace = true
 chrono.workspace = true
 flow-auth.workspace = true
 flow-domain.workspace = true
+flow-rate-limit.workspace = true
 flow-store.workspace = true
 futures-util.workspace = true
 http.workspace = true
@@ -26,4 +27,3 @@ uuid.workspace = true
 
 [lints]
 workspace = true
-

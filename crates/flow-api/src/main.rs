@@ -3,10 +3,11 @@ mod coturn_metrics;
 mod error;
 mod routes;
 
-use std::{env, process::ExitCode};
+use std::{env, net::SocketAddr, process::ExitCode, sync::Arc};
 
 use anyhow::{Context, Result};
 use config::Config;
+use flow_rate_limit::IpRateLimiter;
 use flow_store::PgStore;
 use routes::AppState;
 use tokio::net::TcpListener;
@@ -39,6 +40,10 @@ async fn run() -> Result<()> {
     }
 
     let bind_addr = config.bind_addr;
+    let rate_limiter = Arc::new(IpRateLimiter::new(
+        config.redis_backend,
+        config.rate_limit_policy,
+    ));
     let app = routes::router(AppState {
         store,
         principal_auth: config.principal_authenticator,
@@ -51,15 +56,20 @@ async fn run() -> Result<()> {
         signaling_urls: config.signaling_urls,
         turn: config.turn,
         participant_token_ttl: config.participant_token_ttl,
+        rate_limiter,
+        trusted_proxies: config.trusted_proxies,
     });
     let listener = TcpListener::bind(bind_addr)
         .await
         .with_context(|| format!("bind {bind_addr}"))?;
     info!(%bind_addr, "flow-api listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("serve API")
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("serve API")
 }
 
 fn init_tracing() {

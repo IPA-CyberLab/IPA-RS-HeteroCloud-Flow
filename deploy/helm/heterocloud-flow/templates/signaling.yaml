@@ -82,6 +82,12 @@ spec:
                   key: {{ .Values.principalAuth.contextSecretKey }}
             - name: SIGNAL_AUTH_TIMEOUT_SECONDS
               value: {{ .Values.signaling.authTimeoutSeconds | quote }}
+            - name: FLOW_PUBLIC_RATE_LIMIT_RPS
+              value: {{ .Values.rateLimit.requestsPerSecond | quote }}
+            - name: FLOW_PUBLIC_RATE_LIMIT_BURST
+              value: {{ .Values.rateLimit.burst | quote }}
+            - name: FLOW_TRUSTED_PROXY_CIDRS
+              value: {{ join "," .Values.rateLimit.trustedProxyCidrs | quote }}
             {{- if or .Values.redis.enabled .Values.externalRedis.sentinelUrls }}
             - name: REDIS_SENTINEL_URLS
               value: {{ include "flow.redisSentinelUrls" . | quote }}

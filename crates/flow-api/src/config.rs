@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, env, net::SocketAddr, str::FromStr, time::Durat
 use anyhow::{Context, Result, bail};
 use flow_auth::{PrincipalAuthenticator, ProviderAuthenticator};
 use flow_livekit::LiveKitClient;
+use flow_rate_limit::{RateLimitPolicy, RedisBackend, TrustedProxies};
 use flow_turn::TurnCredentialIssuer;
 use url::Url;
 
@@ -23,6 +24,9 @@ pub struct Config {
     pub signaling_urls: Vec<String>,
     pub turn: TurnCredentialIssuer,
     pub participant_token_ttl: Duration,
+    pub redis_backend: RedisBackend,
+    pub rate_limit_policy: RateLimitPolicy,
+    pub trusted_proxies: TrustedProxies,
 }
 
 impl Config {
@@ -87,6 +91,11 @@ impl Config {
         let livekit_metrics_urls = optional_url_list("LIVEKIT_METRICS_URLS")?;
         let livekit_metrics = LiveKitMetricsClient::new(livekit_metrics_urls)
             .context("LIVEKIT_METRICS_URLS is invalid")?;
+        let redis_backend = RedisBackend::from_env().context("invalid Redis configuration")?;
+        let rate_limit_policy =
+            RateLimitPolicy::from_env().context("invalid public rate-limit policy")?;
+        let trusted_proxies =
+            TrustedProxies::from_env().context("invalid trusted proxy configuration")?;
 
         Ok(Self {
             bind_addr,
@@ -103,6 +112,9 @@ impl Config {
             signaling_urls,
             turn,
             participant_token_ttl,
+            redis_backend,
+            rate_limit_policy,
+            trusted_proxies,
         })
     }
 }

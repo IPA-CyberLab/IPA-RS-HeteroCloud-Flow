@@ -36,6 +36,13 @@ principalAuth:
   maxTokenTtlSeconds: 300
   contextSecretKey: flow-principal-context-hmac-secret
 
+rateLimit:
+  requestsPerSecond: 20
+  burst: 40
+  trustedProxyCidrs:
+    - 127.0.0.0/8
+    - ::1/128
+
 database:
   externalPort: 5432
   maxConnections:
@@ -104,7 +111,7 @@ livekit:
   replicaCount: 3
   image:
     repository: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-livekit
-    tag: "0.1.6"
+    tag: "0.1.7"
     pullPolicy: IfNotPresent
   internalUrl: http://heterocloud-flow-livekit:7880
   publicUrls:

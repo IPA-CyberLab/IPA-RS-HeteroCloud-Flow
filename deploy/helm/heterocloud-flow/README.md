@@ -67,9 +67,9 @@ helm upgrade --install flow deploy/helm/heterocloud-flow \
   -f deploy/environments/heteronet/values.yaml
 ```
 
-The checked-in overlay contains the current `flow-a/b/c`, `rtc-a/b/c`, and
-`turn-a/b/c` sslip hostnames. Verify their public-IP mapping before installation.
-The overlay sets:
+The checked-in overlay uses the unified `flow.heterocloud.mizuame.app` public
+name. Its multi-address A record must contain every public ingress node. The
+overlay sets:
 
 - `hostNetwork: true` and `ClusterFirstWithHostNet` for API, matchmaker, and
   signaling; LiveKit and coturn are host-network media pods as well
@@ -86,7 +86,9 @@ The overlay sets:
   `aud=heterocloud-flow`
 - Redis primary plus two replicas with persistence disabled, which uses
   `emptyDir` and requires no `StorageClass`
-- three ordered HTTPS/WSS public endpoints while backend listeners remain HTTP
+- one stable HTTPS/WSS public endpoint while backend listeners remain HTTP
+- a Redis-backed source-IP token bucket shared by API and signaling replicas,
+  with forwarding metadata trusted only from the three managed Caddy addresses
 - immutable Redis and Sentinel image digests; LiveKit `v1.13.5` and coturn
   `4.16.0`
 
@@ -112,24 +114,21 @@ disabled and exposes them only through per-node Caddy HTTPS/WSS listeners.
 
 The production browser endpoints are:
 
-| Role | Ordered endpoints |
+| Role | Endpoint |
 | --- | --- |
-| Flow API and P2P signaling | `flow-a.163-220-236-51.sslip.io`, `flow-b.163-220-236-52.sslip.io`, `flow-c.163-220-236-53.sslip.io` |
-| LiveKit signaling | `rtc-a.163-220-236-51.sslip.io`, `rtc-b.163-220-236-52.sslip.io`, `rtc-c.163-220-236-53.sslip.io` |
-| TURN | `turn-a.163-220-236-51.sslip.io`, `turn-b.163-220-236-52.sslip.io`, `turn-c.163-220-236-53.sslip.io`, each over UDP and TCP |
+| Flow API and P2P signaling | `flow.heterocloud.mizuame.app` |
+| LiveKit signaling | `flow.heterocloud.mizuame.app` |
+| STUN/TURN | `flow.heterocloud.mizuame.app`, over UDP and TCP |
 
-Flow emits only `wss://` signaling and LiveKit URLs in join responses. The first
-entry is primary and the other two are client failover endpoints. The room path
-is appended to all Flow signaling origins. Shared LiveKit keys make one room
-token valid at every LiveKit signaling endpoint.
+Flow emits only secure signaling and LiveKit URLs in join responses. DNS selects
+an available gateway for the unified hostname. The room path is appended to the
+Flow signaling origin. Shared LiveKit keys make one room token valid at every
+LiveKit signaling replica.
 
-For the normal HeteroNet deployment, install
-[`flow.Caddyfile.example`](../../environments/heteronet/flow.Caddyfile.example)
-on every eligible node through
-`HETERONETWORK_AGENT_PUBLIC_WEB_GATEWAY_EXTRA_CADDYFILE`. Caddy terminates TLS
-and uses local-first health failover across `10.250.0.4`, `10.250.0.5`, and
-`10.250.0.6` on ports `8080`, `8082`, and `7880`. Install the matching `a`, `b`,
-or `c` host pair on its public node. The example returns 404 for `/internal/*`
+For the normal HeteroNet deployment, install the node-specific public gateway
+configuration from the HeteroCloud repository. Caddy terminates TLS, preserves
+the direct client address in `X-Forwarded-For`, routes API, signaling, and
+LiveKit paths to the local data-plane replica, and returns 404 for `/internal/*`
 before any API proxy. Raw backend ports must remain private. Certificate
 issuance, firewall rules, and stable multi-A DNS records are deployment
 responsibilities outside this chart.

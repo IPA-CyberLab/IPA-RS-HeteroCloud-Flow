@@ -83,6 +83,11 @@ share queues, tickets, rooms, audit events, or usage idempotency keys.
 
 ## API
 
+The generated OpenAPI 3.1 schema is served at `/openapi.json`, and the vendored
+interactive documentation is served at `/docs/`. The schema contains only the
+customer data-plane API; provider-only `/internal/*` operations are excluded.
+Its security requirement models all three `X-Flow-*` headers as mandatory.
+
 | Method and path | Permission | Result |
 | --- | --- | --- |
 | `PUT /internal/v1/service-instances/{id}` | EdDSA provider command | Idempotently persist desired generation/spec/status |
@@ -95,6 +100,18 @@ share queues, tickets, rooms, audit events, or usage idempotency keys.
 | `GET /v1/rooms/{id}` | `flow.room.read` | Read a scoped room |
 | `POST /v1/rooms/{id}/join` | `flow.room.join` | Issue mode-specific connection data |
 | `POST /v1/turn-credentials` | `flow.turn.issue` | Issue short-lived coturn REST credentials |
+
+All public REST requests and P2P WebSocket upgrade attempts share a Redis-backed
+source-IP token bucket across every API and signaling replica. The default is
+20 requests per second with a burst of 40. Successful REST responses expose
+`X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`; rejected
+requests return `429` with the same fields and `Retry-After`. Redis failure is
+fail-closed with `503`, and readiness also verifies the limiter backend.
+
+`X-Forwarded-For` is accepted only when the immediate peer belongs to
+`FLOW_TRUSTED_PROXY_CIDRS`. The rightmost forwarded address is used so a client
+cannot prepend a forged address. Direct callers and untrusted proxies are
+limited by their socket peer address.
 
 `p2p` join responses contain an ordered `connection.urls` array of WSS Flow
 signaling URLs, with `/v1/signal/{room_id}` appended to every origin. `sfu`

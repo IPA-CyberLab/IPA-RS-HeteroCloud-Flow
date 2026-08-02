@@ -7,15 +7,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use axum::{
     Json, Router,
+    body::Body,
     extract::{
-        Path, State,
+        ConnectInfo, Path, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderMap, HeaderValue, StatusCode},
-    response::Response,
+    http::{HeaderMap, HeaderValue, Request, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::get,
 };
 use chrono::Utc;
@@ -27,12 +29,12 @@ use flow_domain::{
     NewAuditEvent, NewSignalingConnection, NewUsageEvent, PrincipalContext, RoomState,
     SIGNALING_HEARTBEAT_INTERVAL, SessionMode,
 };
+use flow_rate_limit::{
+    IpRateLimiter, RateLimitDecision, RateLimitPolicy, RedisBackend, TrustedProxies,
+};
 use flow_store::PgStore;
 use futures_util::{SinkExt, StreamExt};
-use redis::{
-    AsyncCommands, Client, IntoConnectionInfo,
-    sentinel::{SentinelClientBuilder, SentinelServerType},
-};
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -46,16 +48,9 @@ struct AppState {
     store: PgStore,
     principal_auth: PrincipalAuthenticator,
     redis: Arc<RedisBackend>,
+    rate_limiter: Arc<IpRateLimiter>,
+    trusted_proxies: TrustedProxies,
     auth_timeout: Duration,
-}
-
-#[derive(Clone)]
-struct RedisBackend {
-    direct_url: Option<String>,
-    sentinel_urls: Vec<String>,
-    sentinel_master: String,
-    redis_password: Option<String>,
-    sentinel_password: Option<String>,
 }
 
 struct Config {
@@ -65,6 +60,8 @@ struct Config {
     migrate_on_start: bool,
     principal_auth: PrincipalAuthenticator,
     redis: RedisBackend,
+    rate_limit_policy: RateLimitPolicy,
+    trusted_proxies: TrustedProxies,
     auth_timeout: Duration,
 }
 
@@ -89,26 +86,41 @@ async fn run() -> Result<()> {
         store.migrate().await.context("run database migrations")?;
     }
     let bind_addr = config.bind_addr;
+    let rate_limiter = Arc::new(IpRateLimiter::new(
+        config.redis.clone(),
+        config.rate_limit_policy,
+    ));
     let state = AppState {
         store,
         principal_auth: config.principal_auth,
         redis: Arc::new(config.redis),
+        rate_limiter,
+        trusted_proxies: config.trusted_proxies,
         auth_timeout: config.auth_timeout,
     };
+    let signal_route = Router::new()
+        .route("/v1/signal/{room_id}", get(signal_upgrade))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            enforce_ip_rate_limit,
+        ));
     let app = Router::new()
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
-        .route("/v1/signal/{room_id}", get(signal_upgrade))
+        .merge(signal_route)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
     let listener = TcpListener::bind(bind_addr)
         .await
         .with_context(|| format!("bind {bind_addr}"))?;
     info!(%bind_addr, "flow-signaling listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("serve signaling")
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("serve signaling")
 }
 
 async fn live() -> Json<Value> {
@@ -126,7 +138,79 @@ async fn ready(State(state): State<AppState>) -> Result<Json<Value>, StatusCode>
         .ping()
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    state
+        .rate_limiter
+        .ping()
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     Ok(Json(json!({"status": "ready"})))
+}
+
+async fn enforce_ip_rate_limit(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map_or_else(|| SocketAddr::from(([127, 0, 0, 1], 0)), |value| value.0);
+    let client_ip = state.trusted_proxies.client_ip(peer, request.headers());
+    let decision = match state.rate_limiter.check(client_ip).await {
+        Ok(decision) => decision,
+        Err(error) => {
+            warn!(%error, %client_ip, "IP rate-limit backend is unavailable");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "error": {
+                        "code": "rate_limit_unavailable",
+                        "message": "request admission service is unavailable"
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
+    if !decision.allowed {
+        let mut response = (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "error": {
+                    "code": "rate_limit_exceeded",
+                    "message": "source IP request limit exceeded"
+                }
+            })),
+        )
+            .into_response();
+        insert_rate_limit_headers(&mut response, decision);
+        insert_numeric_header(
+            &mut response,
+            "retry-after",
+            decision.retry_after_seconds.max(1),
+        );
+        return response;
+    }
+
+    let mut response = next.run(request).await;
+    insert_rate_limit_headers(&mut response, decision);
+    response
+}
+
+fn insert_rate_limit_headers(response: &mut Response, decision: RateLimitDecision) {
+    insert_numeric_header(response, "x-ratelimit-limit", u64::from(decision.limit));
+    insert_numeric_header(
+        response,
+        "x-ratelimit-remaining",
+        u64::from(decision.remaining),
+    );
+    insert_numeric_header(response, "x-ratelimit-reset", decision.reset_after_seconds);
+}
+
+fn insert_numeric_header(response: &mut Response, name: &'static str, value: u64) {
+    if let Ok(value) = HeaderValue::from_str(&value.to_string()) {
+        response.headers_mut().insert(name, value);
+    }
 }
 
 async fn signal_upgrade(
@@ -585,65 +669,6 @@ async fn persist_connection_usage(
     }
 }
 
-impl RedisBackend {
-    async fn client(&self) -> Result<Client> {
-        if let Some(url) = &self.direct_url {
-            let mut information = url
-                .as_str()
-                .into_connection_info()
-                .context("parse REDIS_URL")?;
-            if let Some(password) = &self.redis_password {
-                let settings = information.redis_settings().clone().set_password(password);
-                information = information.set_redis_settings(settings);
-            }
-            return Client::open(information).context("open REDIS_URL");
-        }
-        let addresses = self
-            .sentinel_urls
-            .iter()
-            .map(|url| {
-                url.as_str()
-                    .into_connection_info()
-                    .map(|information| information.addr().clone())
-            })
-            .collect::<redis::RedisResult<Vec<_>>>()
-            .context("parse Redis Sentinel URLs")?;
-        let mut builder = SentinelClientBuilder::new(
-            addresses,
-            &self.sentinel_master,
-            SentinelServerType::Master,
-        )
-        .context("configure Redis Sentinel")?;
-        if let Some(password) = &self.redis_password {
-            builder = builder.set_client_to_redis_password(password);
-        }
-        if let Some(password) = &self.sentinel_password {
-            builder = builder.set_client_to_sentinel_password(password);
-        }
-        let mut sentinel = builder.build().context("build Redis Sentinel client")?;
-        sentinel
-            .async_get_client()
-            .await
-            .context("resolve Redis master")
-    }
-
-    async fn ping(&self) -> Result<()> {
-        let client = self.client().await?;
-        let mut connection = client
-            .get_multiplexed_async_connection()
-            .await
-            .context("connect to Redis")?;
-        let response: String = redis::cmd("PING")
-            .query_async(&mut connection)
-            .await
-            .context("ping Redis")?;
-        if response != "PONG" {
-            bail!("unexpected Redis PING response");
-        }
-        Ok(())
-    }
-}
-
 impl Config {
     fn from_env() -> Result<Self> {
         let max_auth_ttl_seconds = parse_or("FLOW_PRINCIPAL_MAX_TTL_SECONDS", "300")?;
@@ -653,35 +678,15 @@ impl Config {
             required("FLOW_PRINCIPAL_CONTEXT_HMAC_SECRET")?,
             Duration::from_secs(max_auth_ttl_seconds),
         )?;
-        let direct_url = env::var("REDIS_URL").ok().filter(|value| !value.is_empty());
-        let sentinel_urls = env::var("REDIS_SENTINEL_URLS")
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-        if direct_url.is_none() && sentinel_urls.is_empty() {
-            bail!("REDIS_URL or REDIS_SENTINEL_URLS is required");
-        }
         Ok(Self {
             bind_addr: parse_or("FLOW_SIGNALING_BIND_ADDR", "0.0.0.0:8082")?,
             database_url: required("DATABASE_URL")?,
             database_max_connections: parse_or("DATABASE_MAX_CONNECTIONS", "20")?,
             migrate_on_start: parse_or("MIGRATE_ON_START", "false")?,
             principal_auth,
-            redis: RedisBackend {
-                direct_url,
-                sentinel_urls,
-                sentinel_master: env::var("REDIS_SENTINEL_MASTER")
-                    .unwrap_or_else(|_| "mymaster".into()),
-                redis_password: env::var("REDIS_PASSWORD")
-                    .ok()
-                    .filter(|value| !value.is_empty()),
-                sentinel_password: env::var("REDIS_SENTINEL_PASSWORD")
-                    .ok()
-                    .filter(|value| !value.is_empty()),
-            },
+            redis: RedisBackend::from_env()?,
+            rate_limit_policy: RateLimitPolicy::from_env()?,
+            trusted_proxies: TrustedProxies::from_env()?,
             auth_timeout: Duration::from_secs(parse_or("SIGNAL_AUTH_TIMEOUT_SECONDS", "5")?),
         })
     }

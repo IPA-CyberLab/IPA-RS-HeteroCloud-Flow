@@ -55,6 +55,22 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    pub fn rate_limited() -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: "rate_limit_exceeded",
+            message: "source IP request limit exceeded".into(),
+        }
+    }
+
+    pub fn rate_limit_unavailable() -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            code: "rate_limit_unavailable",
+            message: "request admission service is unavailable".into(),
+        }
+    }
 }
 
 impl From<AuthError> for ApiError {
@@ -112,13 +128,13 @@ impl IntoResponse for ApiError {
     }
 }
 
-#[derive(Serialize)]
-struct ErrorEnvelope {
-    error: ErrorBody,
+#[derive(Serialize, utoipa::ToSchema)]
+pub(crate) struct ErrorEnvelope {
+    pub(crate) error: ErrorBody,
 }
 
-#[derive(Serialize)]
-struct ErrorBody {
-    code: &'static str,
-    message: String,
+#[derive(Serialize, utoipa::ToSchema)]
+pub(crate) struct ErrorBody {
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
 }

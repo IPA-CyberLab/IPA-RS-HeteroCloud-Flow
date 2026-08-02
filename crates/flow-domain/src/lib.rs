@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 const MAX_EXTERNAL_ID_LEN: usize = 128;
@@ -50,7 +51,7 @@ impl PrincipalContext {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionMode {
     P2p,
@@ -81,7 +82,7 @@ impl FromStr for SessionMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TicketState {
     Queued,
@@ -121,7 +122,7 @@ impl FromStr for TicketState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RoomState {
     Provisioning,
@@ -158,7 +159,7 @@ impl FromStr for RoomState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MatchmakingTicket {
     pub id: Uuid,
     pub organization_id: Uuid,
@@ -213,7 +214,7 @@ impl NewTicket {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FlowRoom {
     pub id: Uuid,
     pub organization_id: Uuid,
@@ -264,7 +265,7 @@ impl NewRoom {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MatchAssignment {
     pub id: Uuid,
     pub ticket_id: Uuid,

@@ -6,6 +6,7 @@ use hmac::{Hmac, Mac};
 use serde::Serialize;
 use sha1::Sha1;
 use thiserror::Error;
+use utoipa::ToSchema;
 
 #[derive(Clone)]
 pub struct TurnCredentialIssuer {
@@ -119,7 +120,7 @@ impl TurnCredentialIssuer {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TurnCredentials {
     pub urls: Vec<String>,
     pub username: String,

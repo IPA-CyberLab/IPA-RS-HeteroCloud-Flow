@@ -1,10 +1,12 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, FromRequestParts, Path, Query, State},
-    http::{HeaderMap, StatusCode, header::HeaderName, request::Parts},
-    response::IntoResponse,
+    body::Body,
+    extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Path, Query, State},
+    http::{HeaderMap, HeaderValue, Request, StatusCode, header::HeaderName, request::Parts},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
 use chrono::Utc;
@@ -15,19 +17,25 @@ use flow_domain::{
     ServiceInstanceReconcile, ServiceInstanceStatus, SessionMode,
 };
 use flow_livekit::LiveKitClient;
+use flow_rate_limit::{IpRateLimiter, RateLimitDecision, TrustedProxies};
 use flow_store::PgStore;
 use flow_turn::{TurnCredentialIssuer, TurnCredentials};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tower_http::trace::TraceLayer;
 use tracing::warn;
+use utoipa::{Modify, OpenApi, ToSchema};
+use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 use crate::coturn_metrics::{CoturnMetricsClient, LiveKitMetricsClient};
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody, ErrorEnvelope};
 
 const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 const IDEMPOTENCY_KEY_HEADER: HeaderName = HeaderName::from_static("idempotency-key");
+const RATE_LIMIT_HEADER: HeaderName = HeaderName::from_static("x-ratelimit-limit");
+const RATE_LIMIT_REMAINING_HEADER: HeaderName = HeaderName::from_static("x-ratelimit-remaining");
+const RATE_LIMIT_RESET_HEADER: HeaderName = HeaderName::from_static("x-ratelimit-reset");
 
 #[derive(Clone)]
 pub struct AppState {
@@ -42,16 +50,13 @@ pub struct AppState {
     pub signaling_urls: Vec<String>,
     pub turn: TurnCredentialIssuer,
     pub participant_token_ttl: Duration,
+    pub rate_limiter: Arc<IpRateLimiter>,
+    pub trusted_proxies: TrustedProxies,
 }
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/health/live", get(live))
-        .route("/health/ready", get(ready))
-        .route(
-            "/internal/v1/service-instances/{service_instance_id}",
-            put(reconcile_service_instance).delete(delete_service_instance),
-        )
+    let api_document = public_openapi(&state.api_urls);
+    let public_routes = Router::new()
         .route("/v1/service-overview", get(service_overview))
         .route(
             "/v1/queues/{queue_name}/tickets",
@@ -63,6 +68,20 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/rooms/{room_id}", get(get_room))
         .route("/v1/rooms/{room_id}/join", post(join_room))
         .route("/v1/turn-credentials", post(issue_turn_credentials))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            enforce_ip_rate_limit,
+        ));
+
+    Router::new()
+        .route("/health/live", get(live))
+        .route("/health/ready", get(ready))
+        .route(
+            "/internal/v1/service-instances/{service_instance_id}",
+            put(reconcile_service_instance).delete(delete_service_instance),
+        )
+        .merge(public_routes)
+        .merge(SwaggerUi::new("/docs").url("/openapi.json", api_document))
         .layer(DefaultBodyLimit::max(256 * 1024))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -74,9 +93,82 @@ async fn live() -> impl IntoResponse {
 
 async fn ready(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     state.store.health().await?;
+    state
+        .rate_limiter
+        .ping()
+        .await
+        .map_err(|_| ApiError::rate_limit_unavailable())?;
     Ok(Json(json!({"status": "ready"})))
 }
 
+async fn enforce_ip_rate_limit(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map_or_else(|| SocketAddr::from(([127, 0, 0, 1], 0)), |value| value.0);
+    let client_ip = state.trusted_proxies.client_ip(peer, request.headers());
+    let decision = match state.rate_limiter.check(client_ip).await {
+        Ok(decision) => decision,
+        Err(error) => {
+            warn!(%error, %client_ip, "IP rate-limit backend is unavailable");
+            return ApiError::rate_limit_unavailable().into_response();
+        }
+    };
+    if !decision.allowed {
+        let mut response = ApiError::rate_limited().into_response();
+        insert_rate_limit_headers(&mut response, decision);
+        let retry_after = decision.retry_after_seconds.max(1).to_string();
+        if let Ok(value) = HeaderValue::from_str(&retry_after) {
+            response.headers_mut().insert("retry-after", value);
+        }
+        return response;
+    }
+
+    let mut response = next.run(request).await;
+    insert_rate_limit_headers(&mut response, decision);
+    response
+}
+
+fn insert_rate_limit_headers(response: &mut Response, decision: RateLimitDecision) {
+    for (name, value) in [
+        (&RATE_LIMIT_HEADER, decision.limit.to_string()),
+        (&RATE_LIMIT_REMAINING_HEADER, decision.remaining.to_string()),
+        (
+            &RATE_LIMIT_RESET_HEADER,
+            decision.reset_after_seconds.to_string(),
+        ),
+    ] {
+        if let Ok(value) = HeaderValue::from_str(&value) {
+            response.headers_mut().insert(name, value);
+        }
+    }
+}
+
+/// Read current service capacity, usage, and connection endpoints.
+#[utoipa::path(
+    get,
+    path = "/v1/service-overview",
+    tag = "Overview",
+    security(("flow_principal" = [], "flow_timestamp" = [], "flow_signature" = [])),
+    responses(
+        (status = 200, description = "Current Flow service overview", body = ServiceOverviewResponse),
+        (status = 401, description = "Signed access context is missing or invalid", body = ErrorEnvelope),
+        (status = 403, description = "The context lacks flow.metrics.read", body = ErrorEnvelope),
+        (status = 429, description = "Source IP token bucket is empty", body = ErrorEnvelope,
+            headers(
+                ("Retry-After" = u64, description = "Seconds before retrying"),
+                ("X-RateLimit-Limit" = u32, description = "Configured burst capacity"),
+                ("X-RateLimit-Remaining" = u32, description = "Tokens remaining"),
+                ("X-RateLimit-Reset" = u64, description = "Seconds until the bucket is full")
+            )
+        ),
+        (status = 503, description = "Request admission backend is unavailable", body = ErrorEnvelope)
+    )
+)]
 async fn service_overview(
     State(state): State<AppState>,
     context: RequestContext,
@@ -292,6 +384,25 @@ fn provider_idempotency_key(headers: &HeaderMap) -> Result<Uuid, ApiError> {
         .map_err(|_| ApiError::bad_request("idempotency-key must be a UUID"))
 }
 
+/// Create a matchmaking ticket in a named queue.
+#[utoipa::path(
+    post,
+    path = "/v1/queues/{queue_name}/tickets",
+    tag = "Matchmaking",
+    security(("flow_principal" = [], "flow_timestamp" = [], "flow_signature" = [])),
+    params(("queue_name" = String, Path, max_length = 96, description = "Queue name")),
+    request_body = CreateTicketRequest,
+    responses(
+        (status = 201, description = "Ticket created", body = MatchmakingTicket),
+        (status = 400, description = "Ticket request is invalid", body = ErrorEnvelope),
+        (status = 401, description = "Signed access context is missing or invalid", body = ErrorEnvelope),
+        (status = 403, description = "The context lacks flow.queue.write", body = ErrorEnvelope),
+        (status = 429, description = "Source IP request limit exceeded", body = ErrorEnvelope,
+            headers(("Retry-After" = u64), ("X-RateLimit-Limit" = u32), ("X-RateLimit-Remaining" = u32), ("X-RateLimit-Reset" = u64))
+        ),
+        (status = 503, description = "Request admission backend is unavailable", body = ErrorEnvelope)
+    )
+)]
 async fn create_ticket(
     State(state): State<AppState>,
     context: RequestContext,
@@ -341,6 +452,26 @@ async fn create_ticket(
     Ok((StatusCode::CREATED, Json(ticket)))
 }
 
+/// List matchmaking tickets in one queue and service scope.
+#[utoipa::path(
+    get,
+    path = "/v1/queues/{queue_name}/tickets",
+    tag = "Matchmaking",
+    security(("flow_principal" = [], "flow_timestamp" = [], "flow_signature" = [])),
+    params(
+        ("queue_name" = String, Path, max_length = 96, description = "Queue name"),
+        ("limit" = Option<i64>, Query, minimum = 1, maximum = 200, description = "Maximum items; defaults to 50")
+    ),
+    responses(
+        (status = 200, description = "Scoped ticket list", body = TicketListResponse),
+        (status = 401, description = "Signed access context is missing or invalid", body = ErrorEnvelope),
+        (status = 403, description = "The context lacks flow.queue.read", body = ErrorEnvelope),
+        (status = 429, description = "Source IP request limit exceeded", body = ErrorEnvelope,
+            headers(("Retry-After" = u64), ("X-RateLimit-Limit" = u32), ("X-RateLimit-Remaining" = u32), ("X-RateLimit-Reset" = u64))
+        ),
+        (status = 503, description = "Request admission backend is unavailable", body = ErrorEnvelope)
+    )
+)]
 async fn list_tickets(
     State(state): State<AppState>,
     context: RequestContext,
@@ -361,6 +492,24 @@ async fn list_tickets(
     Ok(Json(ListResponse { items: tickets }))
 }
 
+/// Read a matchmaking ticket and its assignment.
+#[utoipa::path(
+    get,
+    path = "/v1/tickets/{ticket_id}",
+    tag = "Matchmaking",
+    security(("flow_principal" = [], "flow_timestamp" = [], "flow_signature" = [])),
+    params(("ticket_id" = Uuid, Path, description = "Ticket ID")),
+    responses(
+        (status = 200, description = "Ticket and optional assignment", body = TicketResponse),
+        (status = 401, description = "Signed access context is missing or invalid", body = ErrorEnvelope),
+        (status = 403, description = "The context lacks flow.queue.read", body = ErrorEnvelope),
+        (status = 404, description = "Ticket was not found in this service scope", body = ErrorEnvelope),
+        (status = 429, description = "Source IP request limit exceeded", body = ErrorEnvelope,
+            headers(("Retry-After" = u64), ("X-RateLimit-Limit" = u32), ("X-RateLimit-Remaining" = u32), ("X-RateLimit-Reset" = u64))
+        ),
+        (status = 503, description = "Request admission backend is unavailable", body = ErrorEnvelope)
+    )
+)]
 async fn get_ticket(
     State(state): State<AppState>,
     context: RequestContext,
@@ -388,6 +537,25 @@ async fn get_ticket(
     Ok(Json(TicketResponse { ticket, assignment }))
 }
 
+/// Cancel the caller's queued matchmaking ticket.
+#[utoipa::path(
+    delete,
+    path = "/v1/tickets/{ticket_id}",
+    tag = "Matchmaking",
+    security(("flow_principal" = [], "flow_timestamp" = [], "flow_signature" = [])),
+    params(("ticket_id" = Uuid, Path, description = "Ticket ID")),
+    responses(
+        (status = 200, description = "Cancelled ticket", body = MatchmakingTicket),
+        (status = 401, description = "Signed access context is missing or invalid", body = ErrorEnvelope),
+        (status = 403, description = "The context lacks flow.queue.write", body = ErrorEnvelope),
+        (status = 404, description = "Ticket was not found in this service scope", body = ErrorEnvelope),
+        (status = 409, description = "Ticket can no longer be cancelled", body = ErrorEnvelope),
+        (status = 429, description = "Source IP request limit exceeded", body = ErrorEnvelope,
+            headers(("Retry-After" = u64), ("X-RateLimit-Limit" = u32), ("X-RateLimit-Remaining" = u32), ("X-RateLimit-Reset" = u64))
+        ),
+        (status = 503, description = "Request admission backend is unavailable", body = ErrorEnvelope)
+    )
+)]
 async fn cancel_ticket(
     State(state): State<AppState>,
     context: RequestContext,
@@ -416,6 +584,26 @@ async fn cancel_ticket(
     Ok(Json(ticket))
 }
 
+/// Create a P2P or SFU room.
+#[utoipa::path(
+    post,
+    path = "/v1/rooms",
+    tag = "Rooms",
+    security(("flow_principal" = [], "flow_timestamp" = [], "flow_signature" = [])),
+    request_body = CreateRoomRequest,
+    responses(
+        (status = 201, description = "Ready room", body = FlowRoom),
+        (status = 400, description = "Room request is invalid", body = ErrorEnvelope),
+        (status = 401, description = "Signed access context is missing or invalid", body = ErrorEnvelope),
+        (status = 403, description = "The context lacks flow.room.create", body = ErrorEnvelope),
+        (status = 409, description = "Configured concurrent room limit was reached", body = ErrorEnvelope),
+        (status = 429, description = "Source IP request limit exceeded", body = ErrorEnvelope,
+            headers(("Retry-After" = u64), ("X-RateLimit-Limit" = u32), ("X-RateLimit-Remaining" = u32), ("X-RateLimit-Reset" = u64))
+        ),
+        (status = 502, description = "SFU provider is unavailable", body = ErrorEnvelope),
+        (status = 503, description = "Request admission backend is unavailable", body = ErrorEnvelope)
+    )
+)]
 async fn create_room(
     State(state): State<AppState>,
     context: RequestContext,
@@ -486,6 +674,23 @@ async fn create_room(
     Ok((StatusCode::CREATED, Json(room)))
 }
 
+/// List rooms in the signed service scope.
+#[utoipa::path(
+    get,
+    path = "/v1/rooms",
+    tag = "Rooms",
+    security(("flow_principal" = [], "flow_timestamp" = [], "flow_signature" = [])),
+    params(("limit" = Option<i64>, Query, minimum = 1, maximum = 200, description = "Maximum items; defaults to 50")),
+    responses(
+        (status = 200, description = "Scoped room list", body = RoomListResponse),
+        (status = 401, description = "Signed access context is missing or invalid", body = ErrorEnvelope),
+        (status = 403, description = "The context lacks flow.room.read", body = ErrorEnvelope),
+        (status = 429, description = "Source IP request limit exceeded", body = ErrorEnvelope,
+            headers(("Retry-After" = u64), ("X-RateLimit-Limit" = u32), ("X-RateLimit-Remaining" = u32), ("X-RateLimit-Reset" = u64))
+        ),
+        (status = 503, description = "Request admission backend is unavailable", body = ErrorEnvelope)
+    )
+)]
 async fn list_rooms(
     State(state): State<AppState>,
     context: RequestContext,
@@ -504,6 +709,24 @@ async fn list_rooms(
     Ok(Json(ListResponse { items: rooms }))
 }
 
+/// Read one room in the signed service scope.
+#[utoipa::path(
+    get,
+    path = "/v1/rooms/{room_id}",
+    tag = "Rooms",
+    security(("flow_principal" = [], "flow_timestamp" = [], "flow_signature" = [])),
+    params(("room_id" = Uuid, Path, description = "Room ID")),
+    responses(
+        (status = 200, description = "Room", body = FlowRoom),
+        (status = 401, description = "Signed access context is missing or invalid", body = ErrorEnvelope),
+        (status = 403, description = "The context lacks flow.room.read", body = ErrorEnvelope),
+        (status = 404, description = "Room was not found in this service scope", body = ErrorEnvelope),
+        (status = 429, description = "Source IP request limit exceeded", body = ErrorEnvelope,
+            headers(("Retry-After" = u64), ("X-RateLimit-Limit" = u32), ("X-RateLimit-Remaining" = u32), ("X-RateLimit-Reset" = u64))
+        ),
+        (status = 503, description = "Request admission backend is unavailable", body = ErrorEnvelope)
+    )
+)]
 async fn get_room(
     State(state): State<AppState>,
     context: RequestContext,
@@ -522,6 +745,28 @@ async fn get_room(
     Ok(Json(room))
 }
 
+/// Issue mode-specific short-lived connection data for a room.
+#[utoipa::path(
+    post,
+    path = "/v1/rooms/{room_id}/join",
+    tag = "Connectivity",
+    security(("flow_principal" = [], "flow_timestamp" = [], "flow_signature" = [])),
+    params(("room_id" = Uuid, Path, description = "Room ID")),
+    request_body = JoinRoomRequest,
+    responses(
+        (status = 200, description = "P2P signaling or SFU connection data", body = JoinRoomResponse),
+        (status = 400, description = "Join request is invalid", body = ErrorEnvelope),
+        (status = 401, description = "Signed access context is missing, invalid, or nearly expired", body = ErrorEnvelope),
+        (status = 403, description = "The context lacks flow.room.join", body = ErrorEnvelope),
+        (status = 404, description = "Room was not found in this service scope", body = ErrorEnvelope),
+        (status = 409, description = "Room is not ready", body = ErrorEnvelope),
+        (status = 429, description = "Source IP request limit exceeded", body = ErrorEnvelope,
+            headers(("Retry-After" = u64), ("X-RateLimit-Limit" = u32), ("X-RateLimit-Remaining" = u32), ("X-RateLimit-Reset" = u64))
+        ),
+        (status = 502, description = "Connection provider is unavailable", body = ErrorEnvelope),
+        (status = 503, description = "Request admission backend is unavailable", body = ErrorEnvelope)
+    )
+)]
 async fn join_room(
     State(state): State<AppState>,
     context: RequestContext,
@@ -612,6 +857,23 @@ async fn join_room(
     }))
 }
 
+/// Issue short-lived TURN REST credentials for the signed principal.
+#[utoipa::path(
+    post,
+    path = "/v1/turn-credentials",
+    tag = "Connectivity",
+    security(("flow_principal" = [], "flow_timestamp" = [], "flow_signature" = [])),
+    responses(
+        (status = 200, description = "TURN URLs and short-lived credentials", body = TurnCredentials),
+        (status = 400, description = "Credential request is invalid", body = ErrorEnvelope),
+        (status = 401, description = "Signed access context is missing, invalid, or nearly expired", body = ErrorEnvelope),
+        (status = 403, description = "The context lacks flow.turn.issue", body = ErrorEnvelope),
+        (status = 429, description = "Source IP request limit exceeded", body = ErrorEnvelope,
+            headers(("Retry-After" = u64), ("X-RateLimit-Limit" = u32), ("X-RateLimit-Remaining" = u32), ("X-RateLimit-Reset" = u64))
+        ),
+        (status = 503, description = "Request admission backend is unavailable", body = ErrorEnvelope)
+    )
+)]
 async fn issue_turn_credentials(
     State(state): State<AppState>,
     context: RequestContext,
@@ -772,7 +1034,7 @@ struct ReconcileResponse {
     status: ServiceInstanceStatus,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct ServiceOverviewResponse {
     measured_at: chrono::DateTime<Utc>,
     active_rooms: u64,
@@ -787,7 +1049,7 @@ struct ServiceOverviewResponse {
     room_limit: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct ServiceEndpoints {
     api: Vec<String>,
     signaling: Vec<String>,
@@ -796,27 +1058,31 @@ struct ServiceEndpoints {
     turn: Vec<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct CreateTicketRequest {
     mode: SessionMode,
+    #[schema(minimum = 2, maximum = 100)]
     match_size: i32,
     #[serde(default = "empty_object")]
     attributes: Value,
     ttl_seconds: Option<i32>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct CreateRoomRequest {
     mode: SessionMode,
+    #[schema(max_length = 160)]
     name: Option<String>,
     #[serde(default = "default_max_participants")]
+    #[schema(default = 16, minimum = 2, maximum = 1000)]
     max_participants: i32,
     #[serde(default = "empty_object")]
     metadata: Value,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct JoinRoomRequest {
+    #[schema(max_length = 128)]
     display_name: Option<String>,
     #[serde(default = "default_true")]
     can_publish: bool,
@@ -836,20 +1102,32 @@ struct ListResponse<T> {
     items: Vec<T>,
 }
 
-#[derive(Serialize)]
+#[derive(ToSchema)]
+#[allow(dead_code)]
+struct RoomListResponse {
+    items: Vec<FlowRoom>,
+}
+
+#[derive(ToSchema)]
+#[allow(dead_code)]
+struct TicketListResponse {
+    items: Vec<MatchmakingTicket>,
+}
+
+#[derive(Serialize, ToSchema)]
 struct TicketResponse {
     ticket: MatchmakingTicket,
     assignment: Option<MatchAssignment>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct JoinRoomResponse {
     room_id: Uuid,
     mode: SessionMode,
     connection: RoomConnection,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum RoomConnection {
     P2p {
@@ -861,6 +1139,99 @@ enum RoomConnection {
         token: String,
         turn: TurnCredentials,
     },
+}
+
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "HeteroCloud Flow Public API",
+        version = env!("CARGO_PKG_VERSION"),
+        description = "Public room, matchmaking, participant connection, and TURN credential API. Obtain the three short-lived X-Flow-* header values from HeteroCloud and send all three on every REST request. Public REST calls and P2P WebSocket upgrade attempts share a distributed source-IP token bucket."
+    ),
+    paths(
+        service_overview,
+        create_ticket,
+        list_tickets,
+        get_ticket,
+        cancel_ticket,
+        create_room,
+        list_rooms,
+        get_room,
+        join_room,
+        issue_turn_credentials
+    ),
+    components(schemas(
+        ErrorEnvelope,
+        ErrorBody,
+        ServiceOverviewResponse,
+        ServiceEndpoints,
+        CreateTicketRequest,
+        CreateRoomRequest,
+        JoinRoomRequest,
+        TicketResponse,
+        JoinRoomResponse,
+        RoomConnection,
+        MatchmakingTicket,
+        MatchAssignment,
+        FlowRoom,
+        SessionMode,
+        TurnCredentials,
+        RoomListResponse,
+        TicketListResponse
+    )),
+    tags(
+        (name = "Overview", description = "Service capacity and endpoint discovery"),
+        (name = "Matchmaking", description = "Queue and ticket operations"),
+        (name = "Rooms", description = "P2P and SFU room lifecycle"),
+        (name = "Connectivity", description = "Short-lived participant and TURN connection data")
+    ),
+    modifiers(&FlowSecurity)
+)]
+struct PublicApiDoc;
+
+struct FlowSecurity;
+
+impl Modify for FlowSecurity {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
+
+        let components = openapi
+            .components
+            .get_or_insert_with(utoipa::openapi::Components::new);
+        components.add_security_scheme(
+            "flow_principal",
+            SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::with_description(
+                "X-Flow-Principal",
+                "Base64url-encoded signed principal context returned by HeteroCloud",
+            ))),
+        );
+        components.add_security_scheme(
+            "flow_timestamp",
+            SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::with_description(
+                "X-Flow-Timestamp",
+                "Issued-at timestamp returned with the signed principal context",
+            ))),
+        );
+        components.add_security_scheme(
+            "flow_signature",
+            SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::with_description(
+                "X-Flow-Signature",
+                "HMAC signature returned with the signed principal context",
+            ))),
+        );
+    }
+}
+
+fn public_openapi(api_urls: &[String]) -> utoipa::openapi::OpenApi {
+    let mut document = PublicApiDoc::openapi();
+    document.servers = Some(
+        api_urls
+            .iter()
+            .cloned()
+            .map(utoipa::openapi::Server::new)
+            .collect(),
+    );
+    document
 }
 
 fn empty_object() -> Value {
@@ -888,7 +1259,7 @@ const fn default_true() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, env, time::Duration};
+    use std::{collections::BTreeSet, env, sync::Arc, time::Duration};
 
     use axum::{
         body::{Body, to_bytes},
@@ -899,6 +1270,7 @@ mod tests {
     };
     use flow_domain::PrincipalContext;
     use flow_livekit::LiveKitClient;
+    use flow_rate_limit::{IpRateLimiter, RateLimitPolicy, RedisBackend, TrustedProxies};
     use flow_store::PgStore;
     use flow_turn::TurnCredentialIssuer;
     use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
@@ -908,7 +1280,7 @@ mod tests {
 
     use super::{
         AppState, RequestContext, RoomConnection, ServiceEndpoints, ServiceOverviewResponse,
-        livekit_room_name, router, signaling_room_urls,
+        livekit_room_name, public_openapi, router, signaling_room_urls,
     };
     use crate::coturn_metrics::{CoturnMetricsClient, LiveKitMetricsClient};
 
@@ -1015,6 +1387,34 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
         assert_eq!(
             rendered["endpoints"]["stun"][0],
             "stun:turn.example.test:3478"
+        );
+    }
+
+    #[test]
+    fn public_openapi_contains_only_customer_routes_and_three_header_authentication() {
+        let document = public_openapi(&["https://flow.example.test".into()]);
+        let value = serde_json::to_value(document).unwrap();
+        let paths = value["paths"].as_object().unwrap();
+        assert_eq!(paths.len(), 7);
+        assert!(paths.contains_key("/v1/rooms"));
+        assert!(paths.contains_key("/v1/turn-credentials"));
+        assert!(!paths.keys().any(|path| path.starts_with("/internal")));
+        assert_eq!(value["servers"][0]["url"], "https://flow.example.test");
+        assert_eq!(
+            value["paths"]["/v1/rooms"]["post"]["security"][0]
+                .as_object()
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(
+            value["components"]["securitySchemes"]["flow_principal"]["name"],
+            "X-Flow-Principal"
+        );
+        assert!(
+            value["paths"]["/v1/rooms"]["post"]["responses"]["429"]["headers"]
+                .get("Retry-After")
+                .is_some()
         );
     }
 
@@ -1233,6 +1633,11 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
             )
             .unwrap(),
             participant_token_ttl: Duration::from_mins(5),
+            rate_limiter: Arc::new(IpRateLimiter::new(
+                RedisBackend::direct("redis://127.0.0.1:6379").unwrap(),
+                RateLimitPolicy::new(20, 40).unwrap(),
+            )),
+            trusted_proxies: TrustedProxies::from_csv("127.0.0.0/8").unwrap(),
         })
     }
 
