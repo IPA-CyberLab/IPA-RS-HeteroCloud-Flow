@@ -2,10 +2,11 @@ use std::{str::FromStr, time::Duration};
 
 use chrono::{DateTime, Utc};
 use flow_domain::{
-    FlowRoom, MatchAssignment, MatchCandidate, MatchmakingTicket, NewAuditEvent, NewRoom,
-    NewSignalingConnection, NewTicket, NewUsageEvent, ReconcileOutcome, RoomState,
-    ServiceInstanceDelete, ServiceInstanceReconcile, ServiceInstanceStatus, ServiceRateLimit,
-    SessionMode, TicketState, ValidationError, rate_limit_from_spec, room_limit_from_spec,
+    FlowRoom, MAX_PRINCIPAL_CONTEXT_TTL, MatchAssignment, MatchCandidate, MatchmakingTicket,
+    NewAuditEvent, NewRoom, NewSignalingConnection, NewTicket, NewUsageEvent,
+    PRINCIPAL_CONTEXT_CLOCK_SKEW, ReconcileOutcome, RoomState, ServiceInstanceDelete,
+    ServiceInstanceReconcile, ServiceInstanceStatus, ServiceRateLimit, SessionMode, TicketState,
+    ValidationError, rate_limit_from_spec, room_limit_from_spec,
 };
 use serde_json::Value;
 use sqlx::{
@@ -117,6 +118,115 @@ impl PgStore {
         .await?;
         spec.map(|spec| rate_limit_from_spec(&spec).map_err(StoreError::from))
             .transpose()
+    }
+
+    pub async fn revoke_principal_context(
+        &self,
+        organization_id: Uuid,
+        project_id: Uuid,
+        service_instance_id: Uuid,
+        context_id: Uuid,
+        expires_at_unix: i64,
+    ) -> Result<(), StoreError> {
+        let maximum_lifetime = MAX_PRINCIPAL_CONTEXT_TTL
+            .checked_add(PRINCIPAL_CONTEXT_CLOCK_SKEW)
+            .ok_or(StoreError::Configuration(
+                "principal revocation lifetime overflow",
+            ))?;
+        let mut transaction = self.pool.begin().await?;
+        let service_scope = sqlx::query_as::<_, (Uuid, Uuid)>(
+            r"
+            SELECT organization_id, project_id
+            FROM flow_service_instances
+            WHERE id = $1
+            FOR KEY SHARE
+            ",
+        )
+        .bind(service_instance_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(StoreError::NotFound)?;
+        if service_scope != (organization_id, project_id) {
+            return Err(StoreError::Conflict(
+                "service instance scope does not match provider claims",
+            ));
+        }
+        let now = Utc::now().timestamp();
+        let clock_skew_seconds = i64::try_from(PRINCIPAL_CONTEXT_CLOCK_SKEW.as_secs())
+            .map_err(|_| StoreError::Configuration("principal clock skew is invalid"))?;
+        let effective_expires_at_unix = expires_at_unix.saturating_add(clock_skew_seconds);
+        if effective_expires_at_unix <= now {
+            transaction.commit().await?;
+            return Ok(());
+        }
+        let maximum_lifetime = i64::try_from(maximum_lifetime.as_secs())
+            .map_err(|_| StoreError::Configuration("principal revocation lifetime is invalid"))?;
+        if expires_at_unix > now.saturating_add(maximum_lifetime) {
+            return Err(StoreError::RevocationExpiryTooDistant);
+        }
+        let expires_at = DateTime::from_timestamp(effective_expires_at_unix, 0)
+            .ok_or(StoreError::RevocationExpiryTooDistant)?;
+
+        let inserted = sqlx::query(
+            r"
+            INSERT INTO flow_principal_context_revocations (
+                context_id, organization_id, project_id, service_instance_id, expires_at
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (context_id) DO UPDATE
+            SET expires_at = GREATEST(
+                    flow_principal_context_revocations.expires_at,
+                    EXCLUDED.expires_at
+                ),
+                updated_at = now()
+            WHERE flow_principal_context_revocations.organization_id = EXCLUDED.organization_id
+              AND flow_principal_context_revocations.project_id = EXCLUDED.project_id
+              AND flow_principal_context_revocations.service_instance_id = EXCLUDED.service_instance_id
+            ",
+        )
+        .bind(context_id)
+        .bind(organization_id)
+        .bind(project_id)
+        .bind(service_instance_id)
+        .bind(expires_at)
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_database_error)?;
+        if inserted.rows_affected() != 1 {
+            return Err(StoreError::Conflict(
+                "principal context is already revoked in another scope",
+            ));
+        }
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    pub async fn principal_context_is_revoked(
+        &self,
+        organization_id: Uuid,
+        project_id: Uuid,
+        service_instance_id: Uuid,
+        context_id: Uuid,
+    ) -> Result<bool, StoreError> {
+        Ok(sqlx::query_scalar(
+            r"
+            SELECT EXISTS (
+                SELECT 1
+                FROM flow_principal_context_revocations
+                WHERE context_id = $1
+                  AND organization_id = $2
+                  AND project_id = $3
+                  AND service_instance_id = $4
+                  AND expires_at > now()
+            )
+            ",
+        )
+        .bind(context_id)
+        .bind(organization_id)
+        .bind(project_id)
+        .bind(service_instance_id)
+        .fetch_one(&self.pool)
+        .await?)
     }
 
     pub async fn reconcile_service_instance(
@@ -1741,6 +1851,8 @@ pub enum StoreError {
     RoomLimitExceeded { limit: u32 },
     #[error("service instance generation {requested} is stale; current generation is {current}")]
     StaleGeneration { current: i64, requested: i64 },
+    #[error("principal context revocation expiry cannot be more than 315 seconds in the future")]
+    RevocationExpiryTooDistant,
     #[error("store configuration error: {0}")]
     Configuration(&'static str),
     #[error("stored data is invalid: {0}")]

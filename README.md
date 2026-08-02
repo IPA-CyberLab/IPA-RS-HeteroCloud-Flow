@@ -56,6 +56,17 @@ stale generations. An exact retry returns the original `operation_id`.
 Every success response requires both fields and mirrors the persisted status:
 `{"operation_id":"...","status":{"phase":"ready","observed_generation":1,"operation_id":"..."}}`.
 
+The provider can revoke one delegated data-plane context with
+`PUT /internal/v1/service-instances/{service_id}/principal-contexts/{context_id}/revocation`,
+an EdDSA provider token whose exact action is `principal-context.revoke`, and
+body `{"expires_at":1700000300}`. For a still-active context, Flow validates
+the token's organization, project, and service scope against the durable
+service record. Revocations are idempotent and durable until `expires_at`; an
+outbox delivery arriving after that time succeeds as a `204` no-op even when
+the service record has already been deleted, instead of becoming a permanent
+retry. Future expiry is limited to the five-minute principal lifetime plus 15
+seconds of clock skew.
+
 Public room, matchmaking, TURN, and signaling operations do not accept that
 provider JWT. They require `X-Flow-Principal`, `X-Flow-Timestamp`, and
 `X-Flow-Signature`. The first header is base64url JSON containing
@@ -77,6 +88,25 @@ clock skew at the issuance/expiration boundaries; there is no per-request
 15-second freshness check. The signed `context_id` is retained as
 `principal_context_id` on public API and signaling audit records.
 
+Every public REST route first applies the deployment-wide source-IP ceiling,
+including requests with missing, invalid, or revoked credentials. It then
+verifies the signature and checks the revocation table before the
+service-specific IP bucket or business logic. A revoked context receives HTTP
+401 with code `invalid_credentials`; inability to read revocation state fails
+closed with HTTP 503 and code `credential_status_unavailable`. P2P signaling
+performs the same revocation check on its initial authentication frame and every
+15-second heartbeat. An established WebSocket therefore receives
+`principal_context_revoked` and closes no later than the next heartbeat.
+
+Already issued LiveKit participant JWTs and coturn REST credentials cannot be
+retracted through those credential formats. Flow limits both expirations to the
+signed context's remaining lifetime, so their residual validity never exceeds
+that context. LiveKit token metadata includes `principal_context_id` for safe
+correlation, but Flow does not attempt an unreliable all-room scan to remove a
+participant during revocation. Immediate enforcement applies to subsequent
+REST calls and P2P signaling; an existing SFU or TURN session can continue only
+until its already issued credential expires.
+
 Every durable data-plane row and query includes `service_instance_id` as well
 as organization and project. Two managed Flow instances in one project cannot
 share queues, tickets, rooms, audit events, or usage idempotency keys.
@@ -91,6 +121,7 @@ Its security requirement models all three `X-Flow-*` headers as mandatory.
 | Method and path | Permission | Result |
 | --- | --- | --- |
 | `PUT /internal/v1/service-instances/{id}` | EdDSA provider command | Idempotently persist desired generation/spec/status |
+| `PUT /internal/v1/service-instances/{id}/principal-contexts/{context_id}/revocation` | EdDSA `principal-context.revoke` command | Idempotently revoke one short-lived context |
 | `POST /v1/queues/{queue}/tickets` | `flow.queue.write` | Queue a P2P or SFU ticket |
 | `GET /v1/queues/{queue}/tickets` | `flow.queue.read` | List scoped tickets |
 | `GET /v1/tickets/{id}` | `flow.queue.read` | Read ticket and assignment |

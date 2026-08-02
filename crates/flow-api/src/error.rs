@@ -32,6 +32,14 @@ impl ApiError {
         }
     }
 
+    pub fn invalid_credentials() -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            code: "invalid_credentials",
+            message: "signed principal context is invalid or revoked".into(),
+        }
+    }
+
     pub fn conflict(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,
@@ -71,6 +79,14 @@ impl ApiError {
             message: "request admission service is unavailable".into(),
         }
     }
+
+    pub fn credential_status_unavailable() -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            code: "credential_status_unavailable",
+            message: "credential status service is unavailable".into(),
+        }
+    }
 }
 
 impl From<AuthError> for ApiError {
@@ -100,6 +116,9 @@ impl From<StoreError> for ApiError {
             StoreError::StaleGeneration { current, requested } => Self::conflict(format!(
                 "generation {requested} is stale; current generation is {current}"
             )),
+            StoreError::RevocationExpiryTooDistant => Self::bad_request(
+                "principal context revocation expiry cannot be more than 315 seconds in the future",
+            ),
             StoreError::Validation(error) => Self::bad_request(error.to_string()),
             other => {
                 error!(error = %other, "database operation failed");

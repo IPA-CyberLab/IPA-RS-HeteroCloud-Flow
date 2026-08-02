@@ -50,6 +50,11 @@ HeteroCloud keeps that HMAC key and gives clients a precomputed signed header
 set. The set is a bearer context reusable until its signed expiration (at most
 300 seconds in this environment); `x-flow-timestamp` is bound to signed
 `issued_at`, not to each request's wall-clock time.
+Flow stores provider-issued `principal-context.revoke` commands in PostgreSQL.
+REST checks are fail-closed, and P2P WebSockets re-check at each 15-second
+heartbeat. LiveKit and TURN credentials already issued before revocation remain
+valid only for their context-bounded residual TTL; those external credential
+formats do not support a database-backed immediate revocation check.
 
 Set PostgreSQL TLS parameters in `database-url` according to the local HAProxy
 configuration. Do not use `secrets.create=true` in production; it stores

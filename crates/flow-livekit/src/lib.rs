@@ -144,6 +144,7 @@ impl LiveKitClient {
             "project_id": principal.project_id,
             "service_instance_id": principal.service_instance_id,
             "principal_id": principal.principal_id,
+            "principal_context_id": principal.token_id,
             "flow_room_id": room.id,
         });
         AccessToken::with_api_key(&self.api_key, &self.api_secret)
@@ -256,5 +257,11 @@ mod tests {
         );
         assert_eq!(claims.video.room, "flow-room-a");
         assert!(claims.video.room_join);
+        assert!(claims.exp.saturating_sub(claims.nbf) <= 120);
+        let metadata: serde_json::Value = serde_json::from_str(&claims.metadata).unwrap();
+        assert_eq!(
+            metadata["principal_context_id"],
+            principal.token_id.to_string()
+        );
     }
 }

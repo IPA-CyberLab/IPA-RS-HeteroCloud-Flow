@@ -17,6 +17,8 @@ pub const DEFAULT_RATE_LIMIT_REQUESTS_PER_SECOND: u32 = 20;
 pub const DEFAULT_RATE_LIMIT_BURST: u32 = 40;
 pub const MAX_RATE_LIMIT_REQUESTS_PER_SECOND: u32 = 1_000;
 pub const MAX_RATE_LIMIT_BURST: u32 = 5_000;
+pub const MAX_PRINCIPAL_CONTEXT_TTL: Duration = Duration::from_mins(5);
+pub const PRINCIPAL_CONTEXT_CLOCK_SKEW: Duration = Duration::from_secs(15);
 
 pub const SIGNALING_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 pub const SIGNALING_CONNECTION_STALE_AFTER: Duration = Duration::from_secs(45);

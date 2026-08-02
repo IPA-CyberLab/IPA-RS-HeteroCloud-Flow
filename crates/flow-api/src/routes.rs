@@ -10,11 +10,14 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use chrono::Utc;
-use flow_auth::{PROVIDER_DELETE_ACTION, PrincipalAuthenticator, ProviderAuthenticator};
+use flow_auth::{
+    PROVIDER_DELETE_ACTION, PROVIDER_PRINCIPAL_CONTEXT_REVOKE_ACTION, PrincipalAuthenticator,
+    ProviderAuthenticator,
+};
 use flow_domain::{
     FlowRoom, MatchAssignment, MatchmakingTicket, NewAuditEvent, NewRoom, NewTicket, NewUsageEvent,
-    PrincipalContext, RoomState, SIGNALING_CONNECTION_STALE_AFTER, ServiceInstanceDelete,
-    ServiceInstanceReconcile, ServiceInstanceStatus, SessionMode,
+    PRINCIPAL_CONTEXT_CLOCK_SKEW, PrincipalContext, RoomState, SIGNALING_CONNECTION_STALE_AFTER,
+    ServiceInstanceDelete, ServiceInstanceReconcile, ServiceInstanceStatus, SessionMode,
 };
 use flow_livekit::LiveKitClient;
 use flow_rate_limit::{IpRateLimiter, RateLimitDecision, RateLimitPolicy, TrustedProxies};
@@ -83,6 +86,10 @@ pub fn router(state: AppState) -> Router {
             "/internal/v1/service-instances/{service_instance_id}",
             put(reconcile_service_instance).delete(delete_service_instance),
         )
+        .route(
+            "/internal/v1/service-instances/{service_id}/principal-contexts/{context_id}/revocation",
+            put(revoke_principal_context),
+        )
         .merge(public_routes)
         .merge(SwaggerUi::new("/docs").url("/openapi.json", api_document))
         .layer(DefaultBodyLimit::max(256 * 1024))
@@ -124,58 +131,93 @@ async fn enforce_ip_rate_limit(
     if !system_decision.allowed {
         return rate_limited_response(system_decision);
     }
-
-    let mut effective_decision = system_decision;
-    if let Ok(principal) = state.principal_auth.authenticate_headers(request.headers()) {
-        let service_rate_limit = match state
-            .store
-            .ready_service_rate_limit(
-                principal.organization_id,
-                principal.project_id,
-                principal.service_instance_id,
-            )
-            .await
-        {
-            Ok(rate_limit) => rate_limit,
-            Err(error) => {
-                warn!(%error, %client_ip, "failed to load service IP rate limit");
-                return ApiError::rate_limit_unavailable().into_response();
-            }
-        };
-        if let Some(service_rate_limit) = service_rate_limit {
-            let policy = match RateLimitPolicy::new(
-                service_rate_limit.requests_per_second,
-                service_rate_limit.burst,
-            ) {
-                Ok(policy) => policy,
-                Err(error) => {
-                    warn!(%error, service_instance_id = %principal.service_instance_id, "invalid service IP rate limit");
-                    return ApiError::rate_limit_unavailable().into_response();
-                }
-            };
-            effective_decision = match state
-                .rate_limiter
-                .check_service(principal.service_instance_id, client_ip, policy)
-                .await
-            {
-                Ok(decision) => decision,
-                Err(error) => {
-                    warn!(%error, %client_ip, service_instance_id = %principal.service_instance_id, "service IP rate-limit backend is unavailable");
-                    return ApiError::rate_limit_unavailable().into_response();
-                }
-            };
-            if !effective_decision.allowed {
-                return rate_limited_response(effective_decision);
-            }
-            request
-                .extensions_mut()
-                .insert(AdmittedPrincipal(principal));
+    let principal = match authenticate_active_principal(&state, request.headers()).await {
+        Ok(principal) => principal,
+        Err(error) => {
+            let mut response = error.into_response();
+            insert_rate_limit_headers(&mut response, system_decision);
+            return response;
         }
+    };
+
+    let service_rate_limit = match state
+        .store
+        .ready_service_rate_limit(
+            principal.organization_id,
+            principal.project_id,
+            principal.service_instance_id,
+        )
+        .await
+    {
+        Ok(Some(rate_limit)) => rate_limit,
+        Ok(None) => return ApiError::forbidden().into_response(),
+        Err(error) => {
+            warn!(%error, %client_ip, "failed to load service IP rate limit");
+            return ApiError::rate_limit_unavailable().into_response();
+        }
+    };
+    let policy = match RateLimitPolicy::new(
+        service_rate_limit.requests_per_second,
+        service_rate_limit.burst,
+    ) {
+        Ok(policy) => policy,
+        Err(error) => {
+            warn!(%error, service_instance_id = %principal.service_instance_id, "invalid service IP rate limit");
+            return ApiError::rate_limit_unavailable().into_response();
+        }
+    };
+    let effective_decision = match state
+        .rate_limiter
+        .check_service(principal.service_instance_id, client_ip, policy)
+        .await
+    {
+        Ok(decision) => decision,
+        Err(error) => {
+            warn!(%error, %client_ip, service_instance_id = %principal.service_instance_id, "service IP rate-limit backend is unavailable");
+            return ApiError::rate_limit_unavailable().into_response();
+        }
+    };
+    if !effective_decision.allowed {
+        return rate_limited_response(effective_decision);
     }
+    request
+        .extensions_mut()
+        .insert(AdmittedPrincipal(principal));
 
     let mut response = next.run(request).await;
     insert_rate_limit_headers(&mut response, effective_decision);
     response
+}
+
+async fn authenticate_active_principal(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<PrincipalContext, ApiError> {
+    let principal = state.principal_auth.authenticate_headers(headers)?;
+    match state
+        .store
+        .principal_context_is_revoked(
+            principal.organization_id,
+            principal.project_id,
+            principal.service_instance_id,
+            principal.token_id,
+        )
+        .await
+    {
+        Ok(false) => Ok(principal),
+        Ok(true) => Err(ApiError::invalid_credentials()),
+        Err(error) => {
+            warn!(
+                %error,
+                organization_id = %principal.organization_id,
+                project_id = %principal.project_id,
+                service_instance_id = %principal.service_instance_id,
+                context_id = %principal.token_id,
+                "failed to check principal context revocation"
+            );
+            Err(ApiError::credential_status_unavailable())
+        }
+    }
 }
 
 fn rate_limited_response(decision: RateLimitDecision) -> Response {
@@ -427,6 +469,36 @@ async fn delete_service_instance(
             status: outcome.status,
         }),
     ))
+}
+
+async fn revoke_principal_context(
+    State(state): State<AppState>,
+    Path((service_id, context_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    Json(request): Json<PrincipalContextRevocationRequest>,
+) -> Result<StatusCode, ApiError> {
+    let claims = state
+        .provider_auth
+        .authenticate_headers_for_action(&headers, PROVIDER_PRINCIPAL_CONTEXT_REVOKE_ACTION)?;
+    if claims.service_instance_id != service_id {
+        return Err(ApiError::forbidden());
+    }
+    let clock_skew_seconds = i64::try_from(PRINCIPAL_CONTEXT_CLOCK_SKEW.as_secs())
+        .map_err(|_| ApiError::bad_request("principal context clock skew is invalid"))?;
+    if request.expires_at.saturating_add(clock_skew_seconds) <= Utc::now().timestamp() {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    state
+        .store
+        .revoke_principal_context(
+            claims.organization_id,
+            claims.project_id,
+            service_id,
+            context_id,
+            request.expires_at,
+        )
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn provider_idempotency_key(headers: &HeaderMap) -> Result<Uuid, ApiError> {
@@ -855,6 +927,8 @@ async fn join_room(
     if remaining < Duration::from_secs(10) {
         return Err(flow_auth::AuthError::InvalidToken.into());
     }
+    // LiveKit and coturn cannot retract issued credentials through this API.
+    // Bound both credentials to the delegated context's remaining lifetime.
     let turn = state
         .turn
         .issue_with_ttl(&identity, remaining)
@@ -865,7 +939,7 @@ async fn join_room(
             turn,
         },
         SessionMode::Sfu => {
-            let ttl = state.participant_token_ttl.min(remaining);
+            let ttl = participant_token_ttl(state.participant_token_ttl, remaining);
             let token = state
                 .livekit
                 .issue_participant_token(
@@ -1047,7 +1121,7 @@ impl FromRequestParts<AppState> for RequestContext {
         let principal = if let Some(admitted) = parts.extensions.get::<AdmittedPrincipal>() {
             admitted.0.clone()
         } else {
-            let principal = state.principal_auth.authenticate_headers(&parts.headers)?;
+            let principal = authenticate_active_principal(state, &parts.headers).await?;
             if !state
                 .store
                 .service_instance_is_ready(
@@ -1086,6 +1160,12 @@ struct ReconcileRequest {
 #[serde(deny_unknown_fields)]
 struct DeleteServiceInstanceQuery {
     generation: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrincipalContextRevocationRequest {
+    expires_at: i64,
 }
 
 #[derive(Serialize)]
@@ -1309,6 +1389,10 @@ fn livekit_room_name(service_instance_id: Uuid, room_id: Uuid) -> String {
     format!("flow-{service_instance_id}-{room_id}")
 }
 
+fn participant_token_ttl(configured: Duration, context_remaining: Duration) -> Duration {
+    configured.min(context_remaining)
+}
+
 const fn default_max_participants() -> i32 {
     16
 }
@@ -1323,24 +1407,29 @@ mod tests {
 
     use axum::{
         body::{Body, to_bytes},
-        http::{Request, StatusCode, header::AUTHORIZATION},
+        http::{Method, Request, StatusCode, header::AUTHORIZATION},
     };
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     use flow_auth::{
-        PROVIDER_DELETE_ACTION, PROVIDER_RECONCILE_ACTION, PrincipalAuthenticator, ProviderClaims,
+        PRINCIPAL_HEADER, PRINCIPAL_SIGNATURE_HEADER, PRINCIPAL_TIMESTAMP_HEADER,
+        PROVIDER_DELETE_ACTION, PROVIDER_PRINCIPAL_CONTEXT_REVOKE_ACTION,
+        PROVIDER_RECONCILE_ACTION, PrincipalAuthenticator, ProviderClaims, SignedPrincipal,
     };
     use flow_domain::PrincipalContext;
     use flow_livekit::LiveKitClient;
     use flow_rate_limit::{IpRateLimiter, RateLimitPolicy, RedisBackend, TrustedProxies};
     use flow_store::PgStore;
     use flow_turn::TurnCredentialIssuer;
+    use hmac::{Hmac, Mac};
     use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
     use serde_json::{Value, json};
+    use sha2::Sha256;
     use tower::ServiceExt;
     use uuid::Uuid;
 
     use super::{
         AppState, RequestContext, RoomConnection, ServiceEndpoints, ServiceOverviewResponse,
-        livekit_room_name, public_openapi, router, signaling_room_urls,
+        livekit_room_name, participant_token_ttl, public_openapi, router, signaling_room_urls,
     };
     use crate::coturn_metrics::{CoturnMetricsClient, LiveKitMetricsClient};
 
@@ -1350,6 +1439,7 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
 ";
     const PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAQnTjC0+B/djS2k/sebsW6/7yCb+Am2NFtI1EzKH/ZTA=\n-----END PUBLIC KEY-----\n";
     const KEY_ID: &str = "provider-route-test";
+    const PRINCIPAL_SECRET: &[u8] = b"route-test-principal-secret-at-least-32-bytes";
 
     #[derive(Clone, Copy)]
     #[allow(clippy::struct_field_names)]
@@ -1447,6 +1537,18 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
         assert_eq!(
             rendered["endpoints"]["stun"][0],
             "stun:turn.example.test:3478"
+        );
+    }
+
+    #[test]
+    fn participant_token_ttl_never_exceeds_context_remaining_lifetime() {
+        assert_eq!(
+            participant_token_ttl(Duration::from_mins(5), Duration::from_secs(37)),
+            Duration::from_secs(37)
+        );
+        assert_eq!(
+            participant_token_ttl(Duration::from_secs(20), Duration::from_secs(37)),
+            Duration::from_secs(20)
         );
     }
 
@@ -1644,6 +1746,228 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
         assert_eq!(wrong_action.status(), StatusCode::UNAUTHORIZED);
     }
 
+    #[tokio::test]
+    async fn provider_revocation_route_is_scoped_idempotent_and_action_bound() {
+        let Some(state) = test_state().await else {
+            return;
+        };
+        let scope = provision_service(&state, "revocation-route-test").await;
+        let context_id = Uuid::now_v7();
+        let expires_at = chrono::Utc::now().timestamp() + 300;
+        let (token, _) =
+            provider_token_for_action(scope, 1, PROVIDER_PRINCIPAL_CONTEXT_REVOKE_ACTION);
+
+        let first = send_revocation(
+            &state,
+            scope.service_instance_id,
+            context_id,
+            &token,
+            expires_at,
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::NO_CONTENT);
+        let duplicate = send_revocation(
+            &state,
+            scope.service_instance_id,
+            context_id,
+            &token,
+            expires_at,
+        )
+        .await;
+        assert_eq!(duplicate.status(), StatusCode::NO_CONTENT);
+        assert!(
+            state
+                .store
+                .principal_context_is_revoked(
+                    scope.organization_id,
+                    scope.project_id,
+                    scope.service_instance_id,
+                    context_id,
+                )
+                .await
+                .unwrap()
+        );
+
+        let wrong_path =
+            send_revocation(&state, Uuid::new_v4(), context_id, &token, expires_at).await;
+        assert_eq!(wrong_path.status(), StatusCode::FORBIDDEN);
+        let (wrong_action, _) = provider_token(scope, 1);
+        let wrong_action = send_revocation(
+            &state,
+            scope.service_instance_id,
+            Uuid::now_v7(),
+            &wrong_action,
+            expires_at,
+        )
+        .await;
+        assert_eq!(wrong_action.status(), StatusCode::UNAUTHORIZED);
+        let too_distant = send_revocation(
+            &state,
+            scope.service_instance_id,
+            Uuid::now_v7(),
+            &token,
+            chrono::Utc::now().timestamp() + 360,
+        )
+        .await;
+        assert_eq!(too_distant.status(), StatusCode::BAD_REQUEST);
+        let delayed_delivery = send_revocation(
+            &state,
+            scope.service_instance_id,
+            Uuid::now_v7(),
+            &token,
+            chrono::Utc::now().timestamp() - 1,
+        )
+        .await;
+        assert_eq!(delayed_delivery.status(), StatusCode::NO_CONTENT);
+
+        let unknown_scope = CommandScope {
+            principal_id: Uuid::new_v4(),
+            organization_id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            service_instance_id: Uuid::new_v4(),
+        };
+        let (unknown_token, _) =
+            provider_token_for_action(unknown_scope, 1, PROVIDER_PRINCIPAL_CONTEXT_REVOKE_ACTION);
+        let unknown_future = send_revocation(
+            &state,
+            unknown_scope.service_instance_id,
+            Uuid::now_v7(),
+            &unknown_token,
+            chrono::Utc::now().timestamp() + 300,
+        )
+        .await;
+        assert_eq!(unknown_future.status(), StatusCode::NOT_FOUND);
+        let unknown_delayed = send_revocation(
+            &state,
+            unknown_scope.service_instance_id,
+            Uuid::now_v7(),
+            &unknown_token,
+            chrono::Utc::now().timestamp() - 1,
+        )
+        .await;
+        assert_eq!(unknown_delayed.status(), StatusCode::NOT_FOUND);
+        let unknown_expired = send_revocation(
+            &state,
+            unknown_scope.service_instance_id,
+            Uuid::now_v7(),
+            &unknown_token,
+            chrono::Utc::now().timestamp() - 60,
+        )
+        .await;
+        assert_eq!(unknown_expired.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn revoked_context_is_rejected_by_every_public_http_route() {
+        let Some(state) = test_state().await else {
+            return;
+        };
+        let scope = provision_service(&state, "revoked-public-routes").await;
+        let context_id = Uuid::now_v7();
+        let expires_at = chrono::Utc::now().timestamp() + 300;
+        state
+            .store
+            .revoke_principal_context(
+                scope.organization_id,
+                scope.project_id,
+                scope.service_instance_id,
+                context_id,
+                expires_at,
+            )
+            .await
+            .unwrap();
+        let principal_headers = principal_headers(scope, context_id, expires_at);
+        let resource_id = Uuid::new_v4();
+        let routes = [
+            (Method::GET, "/v1/service-overview".to_owned()),
+            (Method::POST, "/v1/queues/test/tickets".to_owned()),
+            (Method::GET, "/v1/queues/test/tickets".to_owned()),
+            (Method::GET, format!("/v1/tickets/{resource_id}")),
+            (Method::DELETE, format!("/v1/tickets/{resource_id}")),
+            (Method::POST, "/v1/rooms".to_owned()),
+            (Method::GET, "/v1/rooms".to_owned()),
+            (Method::GET, format!("/v1/rooms/{resource_id}")),
+            (Method::POST, format!("/v1/rooms/{resource_id}/join")),
+            (Method::POST, "/v1/turn-credentials".to_owned()),
+        ];
+        for (method, path) in routes {
+            let response = send_public_request(&state, method, &path, &principal_headers).await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+            let body = response_json(response).await;
+            assert_eq!(body["error"]["code"], "invalid_credentials", "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn principal_revocation_lookup_failure_fails_closed() {
+        let Some(state) = test_state().await else {
+            return;
+        };
+        let scope = provision_service(&state, "revocation-fail-closed").await;
+        let expires_at = chrono::Utc::now().timestamp() + 300;
+        let principal_headers = principal_headers(scope, Uuid::now_v7(), expires_at);
+        state.store.pool().close().await;
+
+        let response =
+            send_public_request(&state, Method::GET, "/v1/rooms", &principal_headers).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response_json(response).await["error"]["code"],
+            "credential_status_unavailable"
+        );
+    }
+
+    #[tokio::test]
+    async fn system_ip_bucket_precedes_authentication_and_revocation_lookup() {
+        let (Some(mut state), Ok(redis_url)) = (test_state().await, env::var("TEST_REDIS_URL"))
+        else {
+            eprintln!(
+                "TEST_DATABASE_URL or TEST_REDIS_URL is not set; skipping admission ordering test"
+            );
+            return;
+        };
+        let scope = provision_service(&state, "system-rate-limit-order").await;
+        state.rate_limiter = Arc::new(IpRateLimiter::new(
+            RedisBackend::direct(&redis_url).unwrap(),
+            RateLimitPolicy::new(1, 1).unwrap(),
+        ));
+        let random = Uuid::new_v4().into_bytes();
+        let client_ip = format!("198.18.{}.{}", random[0], random[1]);
+
+        let first = router(state.clone())
+            .oneshot(
+                Request::get("/v1/rooms")
+                    .header("x-forwarded-for", &client_ip)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(first.headers()["x-ratelimit-remaining"], "0");
+
+        let expires_at = chrono::Utc::now().timestamp() + 300;
+        let principal_headers = principal_headers(scope, Uuid::now_v7(), expires_at);
+        state.store.pool().close().await;
+        let second = router(state)
+            .oneshot(
+                Request::get("/v1/rooms")
+                    .header("x-forwarded-for", client_ip)
+                    .header(PRINCIPAL_HEADER, &principal_headers.0)
+                    .header(PRINCIPAL_TIMESTAMP_HEADER, &principal_headers.1)
+                    .header(PRINCIPAL_SIGNATURE_HEADER, &principal_headers.2)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response_json(second).await["error"]["code"],
+            "rate_limit_exceeded"
+        );
+    }
+
     async fn test_state() -> Option<AppState> {
         let Ok(database_url) = env::var("TEST_DATABASE_URL") else {
             eprintln!("TEST_DATABASE_URL is not set; skipping API integration test");
@@ -1656,7 +1980,7 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
             principal_auth: PrincipalAuthenticator::new(
                 "heterocloud",
                 "heterocloud-flow-data",
-                b"route-test-principal-secret-at-least-32-bytes".to_vec(),
+                PRINCIPAL_SECRET.to_vec(),
                 Duration::from_mins(5),
             )
             .unwrap(),
@@ -1694,7 +2018,10 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
             .unwrap(),
             participant_token_ttl: Duration::from_mins(5),
             rate_limiter: Arc::new(IpRateLimiter::new(
-                RedisBackend::direct("redis://127.0.0.1:6379").unwrap(),
+                RedisBackend::direct(
+                    env::var("TEST_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into()),
+                )
+                .unwrap(),
                 RateLimitPolicy::new(20, 40).unwrap(),
             )),
             trusted_proxies: TrustedProxies::from_csv("127.0.0.0/8").unwrap(),
@@ -1703,6 +2030,54 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
 
     fn provider_token(scope: CommandScope, generation: i64) -> (String, Uuid) {
         provider_token_for_action(scope, generation, PROVIDER_RECONCILE_ACTION)
+    }
+
+    async fn provision_service(state: &AppState, name: &str) -> CommandScope {
+        let scope = CommandScope {
+            principal_id: Uuid::new_v4(),
+            organization_id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            service_instance_id: Uuid::new_v4(),
+        };
+        let (token, jwt_id) = provider_token(scope, 1);
+        let response = send_reconcile(
+            state,
+            scope.service_instance_id,
+            &token,
+            jwt_id,
+            &json!({"generation": 1, "name": name, "spec": {}}),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        scope
+    }
+
+    fn principal_headers(
+        scope: CommandScope,
+        context_id: Uuid,
+        expires_at: i64,
+    ) -> (String, String, String) {
+        let issued_at = u64::try_from(chrono::Utc::now().timestamp()).unwrap();
+        let signed = SignedPrincipal {
+            issuer: "heterocloud".into(),
+            audience: "heterocloud-flow-data".into(),
+            organization_id: scope.organization_id,
+            project_id: scope.project_id,
+            service_instance_id: scope.service_instance_id,
+            principal_id: scope.principal_id,
+            permissions: BTreeSet::from(["flow.*".into()]),
+            issued_at,
+            expires_at: u64::try_from(expires_at).unwrap(),
+            context_id,
+        };
+        let encoded = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&signed).unwrap());
+        let timestamp = issued_at.to_string();
+        let mut mac = Hmac::<Sha256>::new_from_slice(PRINCIPAL_SECRET).unwrap();
+        mac.update(timestamp.as_bytes());
+        mac.update(b".");
+        mac.update(encoded.as_bytes());
+        let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+        (encoded, timestamp, signature)
     }
 
     fn provider_token_for_action(
@@ -1777,6 +2152,49 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn send_revocation(
+        state: &AppState,
+        service_instance_id: Uuid,
+        context_id: Uuid,
+        token: &str,
+        expires_at: i64,
+    ) -> axum::response::Response {
+        router(state.clone())
+            .oneshot(
+                Request::put(format!(
+                    "/internal/v1/service-instances/{service_instance_id}/principal-contexts/{context_id}/revocation"
+                ))
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"expires_at": expires_at}).to_string()))
+                .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn send_public_request(
+        state: &AppState,
+        method: Method,
+        path: &str,
+        principal_headers: &(String, String, String),
+    ) -> axum::response::Response {
+        router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(PRINCIPAL_HEADER, &principal_headers.0)
+                    .header(PRINCIPAL_TIMESTAMP_HEADER, &principal_headers.1)
+                    .header(PRINCIPAL_SIGNATURE_HEADER, &principal_headers.2)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
             )
             .await
             .unwrap()

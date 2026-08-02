@@ -183,4 +183,22 @@ mod tests {
             ["stun:turn.example.test:3478", "stun:turn.example.test:5349"]
         );
     }
+
+    #[test]
+    fn delegated_lifetime_caps_turn_credential_expiry() {
+        let issuer = TurnCredentialIssuer::new(
+            vec!["turn:turn.example.test:3478?transport=udp".into()],
+            b"turn-secret-with-at-least-thirty-two-bytes",
+            Duration::from_mins(5),
+        )
+        .unwrap();
+        let before = chrono::Utc::now();
+        let credentials = issuer
+            .issue_with_ttl("principal-a", Duration::from_secs(17))
+            .unwrap();
+        let after = chrono::Utc::now();
+
+        assert!(credentials.expires_at >= before + chrono::Duration::seconds(17));
+        assert!(credentials.expires_at <= after + chrono::Duration::seconds(17));
+    }
 }

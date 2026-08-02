@@ -29,7 +29,10 @@ utoipa-swagger-ui.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
+hmac.workspace = true
 jsonwebtoken.workspace = true
+sha2.workspace = true
 tower.workspace = true
 
 [lints]

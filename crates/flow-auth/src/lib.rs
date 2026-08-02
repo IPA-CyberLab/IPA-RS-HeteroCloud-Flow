@@ -6,7 +6,7 @@ use std::{
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{TimeZone, Utc};
-use flow_domain::PrincipalContext;
+use flow_domain::{MAX_PRINCIPAL_CONTEXT_TTL, PRINCIPAL_CONTEXT_CLOCK_SKEW, PrincipalContext};
 use hmac::{Hmac, Mac};
 use http::{
     HeaderMap,
@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 pub const PROVIDER_RECONCILE_ACTION: &str = "service-instance.reconcile";
 pub const PROVIDER_DELETE_ACTION: &str = "service-instance.delete";
+pub const PROVIDER_PRINCIPAL_CONTEXT_REVOKE_ACTION: &str = "principal-context.revoke";
 const PROVIDER_MAX_TOKEN_TTL_SECONDS: i64 = 60;
 const PROVIDER_NOT_BEFORE_OFFSET_SECONDS: i64 = 5;
 
@@ -223,9 +224,9 @@ impl PrincipalAuthenticator {
                 "principal context secret must be at least 32 bytes",
             ));
         }
-        if max_context_ttl.is_zero() {
+        if max_context_ttl.is_zero() || max_context_ttl > MAX_PRINCIPAL_CONTEXT_TTL {
             return Err(AuthError::InvalidConfiguration(
-                "maximum principal context TTL must be positive",
+                "maximum principal context TTL must be between one second and five minutes",
             ));
         }
         Ok(Self {
@@ -233,7 +234,7 @@ impl PrincipalAuthenticator {
             audience,
             context_secret,
             max_context_ttl,
-            clock_skew: Duration::from_secs(15),
+            clock_skew: PRINCIPAL_CONTEXT_CLOCK_SKEW,
         })
     }
 
@@ -280,7 +281,7 @@ impl PrincipalAuthenticator {
         let now_u64 =
             u64::try_from(Utc::now().timestamp()).map_err(|_| AuthError::InvalidPrincipal)?;
         if signed.issued_at > now_u64.saturating_add(self.clock_skew.as_secs())
-            || signed.expires_at.saturating_add(self.clock_skew.as_secs()) < now_u64
+            || signed.expires_at.saturating_add(self.clock_skew.as_secs()) <= now_u64
         {
             return Err(AuthError::InvalidToken);
         }
@@ -386,8 +387,9 @@ mod tests {
 
     use super::{
         AuthError, PRINCIPAL_HEADER, PRINCIPAL_SIGNATURE_HEADER, PRINCIPAL_TIMESTAMP_HEADER,
-        PROVIDER_DELETE_ACTION, PROVIDER_RECONCILE_ACTION, PrincipalAuthenticator,
-        ProviderAuthenticator, ProviderClaims, SignedPrincipal,
+        PROVIDER_DELETE_ACTION, PROVIDER_PRINCIPAL_CONTEXT_REVOKE_ACTION,
+        PROVIDER_RECONCILE_ACTION, PrincipalAuthenticator, ProviderAuthenticator, ProviderClaims,
+        SignedPrincipal,
     };
 
     const PRINCIPAL_SECRET: &[u8] = b"principal-context-secret-with-at-least-thirty-two-bytes";
@@ -503,6 +505,32 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
     }
 
     #[test]
+    fn verifies_revocation_only_for_revocation_contract() {
+        let token = provider_token(PROVIDER_PRINCIPAL_CONTEXT_REVOKE_ACTION);
+        let claims = provider_authenticator()
+            .verify_token_for_action(&token, PROVIDER_PRINCIPAL_CONTEXT_REVOKE_ACTION)
+            .unwrap();
+        assert_eq!(claims.action, PROVIDER_PRINCIPAL_CONTEXT_REVOKE_ACTION);
+        assert_eq!(
+            provider_authenticator().verify_token(&token),
+            Err(AuthError::InvalidProviderCommand)
+        );
+    }
+
+    #[test]
+    fn rejects_principal_context_ttl_over_five_minutes() {
+        assert!(matches!(
+            PrincipalAuthenticator::new(
+                "heterocloud",
+                "heterocloud-flow-data",
+                PRINCIPAL_SECRET,
+                Duration::from_secs(301),
+            ),
+            Err(AuthError::InvalidConfiguration(_))
+        ));
+    }
+
+    #[test]
     fn verifies_service_instance_scoped_principal_context() {
         let now = u64::try_from(chrono::Utc::now().timestamp()).unwrap();
         let service_instance_id = Uuid::new_v4();
@@ -553,6 +581,30 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
         assert_eq!(first.token_id, signed.context_id);
         assert_eq!(reused.token_id, signed.context_id);
         assert_eq!(first, reused);
+    }
+
+    #[test]
+    fn principal_expiry_is_exclusive_after_clock_skew() {
+        let now = u64::try_from(chrono::Utc::now().timestamp()).unwrap();
+        let issued_at = now - 60;
+        let signed = SignedPrincipal {
+            issuer: "heterocloud".into(),
+            audience: "heterocloud-flow-data".into(),
+            organization_id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            service_instance_id: Uuid::new_v4(),
+            principal_id: Uuid::new_v4(),
+            permissions: BTreeSet::from(["flow.queue.write".into()]),
+            issued_at,
+            expires_at: now - 15,
+            context_id: Uuid::now_v7(),
+        };
+        let headers = principal_headers(&signed, issued_at);
+
+        assert_eq!(
+            principal_authenticator().authenticate_headers(&headers),
+            Err(AuthError::InvalidToken)
+        );
     }
 
     #[test]

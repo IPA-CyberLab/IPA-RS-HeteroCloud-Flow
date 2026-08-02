@@ -51,10 +51,18 @@ struct AppState {
     rate_limiter: Arc<IpRateLimiter>,
     trusted_proxies: TrustedProxies,
     auth_timeout: Duration,
+    heartbeat_interval: Duration,
 }
 
 #[derive(Clone, Copy)]
 struct ClientIp(IpAddr);
+
+struct RelaySession {
+    principal: PrincipalContext,
+    connection_id: Uuid,
+    store: PgStore,
+    heartbeat_interval: Duration,
+}
 
 struct Config {
     bind_addr: SocketAddr,
@@ -100,6 +108,7 @@ async fn run() -> Result<()> {
         rate_limiter,
         trusted_proxies: config.trusted_proxies,
         auth_timeout: config.auth_timeout,
+        heartbeat_interval: SIGNALING_HEARTBEAT_INTERVAL,
     };
     let signal_route = Router::new()
         .route("/v1/signal/{room_id}", get(signal_upgrade))
@@ -251,6 +260,44 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid, cl
             return;
         }
     };
+    match state
+        .store
+        .principal_context_is_revoked(
+            principal.organization_id,
+            principal.project_id,
+            principal.service_instance_id,
+            principal.token_id,
+        )
+        .await
+    {
+        Ok(false) => {}
+        Ok(true) => {
+            send_protocol_error(
+                &mut socket,
+                "principal_context_revoked",
+                "delegated principal context is no longer valid",
+            )
+            .await;
+            return;
+        }
+        Err(error) => {
+            warn!(
+                %error,
+                organization_id = %principal.organization_id,
+                project_id = %principal.project_id,
+                service_instance_id = %principal.service_instance_id,
+                context_id = %principal.token_id,
+                "failed to check principal context revocation during authentication"
+            );
+            send_protocol_error(
+                &mut socket,
+                "authentication_unavailable",
+                "credential status service is unavailable",
+            )
+            .await;
+            return;
+        }
+    }
     if !principal.allows("flow.signal.connect") {
         send_protocol_error(
             &mut socket,
@@ -431,9 +478,12 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid, cl
         subscriber,
         publisher,
         channel,
-        principal.clone(),
-        connection_id,
-        state.store.clone(),
+        RelaySession {
+            principal: principal.clone(),
+            connection_id,
+            store: state.store.clone(),
+            heartbeat_interval: state.heartbeat_interval,
+        },
     )
     .await;
     close_signaling_connection(&state.store, connection_id).await;
@@ -494,10 +544,14 @@ async fn relay(
     mut subscriber: redis::aio::PubSub,
     mut publisher: redis::aio::MultiplexedConnection,
     channel: String,
-    principal: PrincipalContext,
-    connection_id: Uuid,
-    store: PgStore,
+    session: RelaySession,
 ) -> u64 {
+    let RelaySession {
+        principal,
+        connection_id,
+        store,
+        heartbeat_interval,
+    } = session;
     let (mut sender, mut receiver) = socket.split();
     let mut redis_messages = subscriber.on_message();
     let mut count = 0_u64;
@@ -506,20 +560,54 @@ async fn relay(
         .unwrap_or(Duration::ZERO);
     let authentication_expiry = tokio::time::sleep(auth_remaining);
     tokio::pin!(authentication_expiry);
-    let mut heartbeat = tokio::time::interval(SIGNALING_HEARTBEAT_INTERVAL);
+    let mut heartbeat = tokio::time::interval(heartbeat_interval);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     heartbeat.tick().await;
     loop {
         tokio::select! {
             () = &mut authentication_expiry => {
-                let frame = ServerFrame::Error {
-                    code: "session_expired",
-                    message: "delegated principal context expired",
-                };
-                let _ = send_frame_to_sink(&mut sender, &frame).await;
+                send_protocol_error_to_sink(
+                    &mut sender,
+                    "session_expired",
+                    "delegated principal context expired",
+                ).await;
                 break;
             }
             _ = heartbeat.tick() => {
+                match store
+                    .principal_context_is_revoked(
+                        principal.organization_id,
+                        principal.project_id,
+                        principal.service_instance_id,
+                        principal.token_id,
+                    )
+                    .await
+                {
+                    Ok(false) => {}
+                    Ok(true) => {
+                        send_protocol_error_to_sink(
+                            &mut sender,
+                            "principal_context_revoked",
+                            "delegated principal context is no longer valid",
+                        ).await;
+                        break;
+                    }
+                    Err(error) => {
+                        warn!(
+                            %error,
+                            %connection_id,
+                            service_instance_id = %principal.service_instance_id,
+                            context_id = %principal.token_id,
+                            "failed to check principal context revocation during heartbeat"
+                        );
+                        send_protocol_error_to_sink(
+                            &mut sender,
+                            "authentication_unavailable",
+                            "credential status service is unavailable",
+                        ).await;
+                        break;
+                    }
+                }
                 match store.heartbeat_signaling_connection(connection_id).await {
                     Ok(true) => {}
                     Ok(false) => {
@@ -647,6 +735,14 @@ where
     sink.send(Message::Text(serialized.into()))
         .await
         .map_err(|_| ())
+}
+
+async fn send_protocol_error_to_sink<S>(sink: &mut S, code: &'static str, message: &str)
+where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    let _ = send_frame_to_sink(sink, &ServerFrame::Error { code, message }).await;
+    let _ = sink.send(Message::Close(None)).await;
 }
 
 fn channel_name(principal: &PrincipalContext, room_id: Uuid) -> String {
@@ -840,10 +936,71 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::BTreeSet,
+        env,
+        net::SocketAddr,
+        pin::Pin,
+        sync::{Arc, Mutex},
+        task::{Context, Poll},
+        time::Duration,
+    };
+
+    use axum::{Router, extract::ws::Message, middleware, routing::get};
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use flow_auth::{PrincipalAuthenticator, SignedPrincipal};
+    use flow_domain::{NewRoom, RoomState, ServiceInstanceReconcile, SessionMode};
+    use flow_rate_limit::{IpRateLimiter, RateLimitPolicy, RedisBackend, TrustedProxies};
+    use flow_store::PgStore;
+    use futures_util::{Sink, SinkExt, StreamExt};
+    use hmac::{Hmac, Mac};
     use serde_json::json;
+    use sha2::Sha256;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{
+        WebSocketStream, connect_async, tungstenite::Message as ClientMessage,
+    };
     use uuid::Uuid;
 
-    use super::{SignalKind, parse_signal};
+    use super::{
+        AppState, SignalKind, enforce_ip_rate_limit, live, parse_signal, ready,
+        send_protocol_error_to_sink, signal_upgrade,
+    };
+
+    const PRINCIPAL_SECRET: &[u8] = b"signaling-test-principal-secret-at-least-32-bytes";
+
+    #[derive(Clone, Default)]
+    struct RecordingSink(Arc<Mutex<Vec<Message>>>);
+
+    impl Sink<Message> for RecordingSink {
+        type Error = ();
+
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+            self.0.lock().unwrap().push(item);
+            Ok(())
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
 
     #[test]
     fn parses_targeted_offer() {
@@ -868,5 +1025,262 @@ mod tests {
             parse_signal(&json!({"type": "leave", "target": target, "payload": null}).to_string())
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn heartbeat_revocation_sends_generic_error_then_closes() {
+        let mut sink = RecordingSink::default();
+        let recorded = sink.0.clone();
+        send_protocol_error_to_sink(
+            &mut sink,
+            "principal_context_revoked",
+            "delegated principal context is no longer valid",
+        )
+        .await;
+
+        let frames = recorded.lock().unwrap();
+        assert_eq!(frames.len(), 2);
+        let Message::Text(error) = &frames[0] else {
+            panic!("first frame must be a text protocol error");
+        };
+        let error: serde_json::Value = serde_json::from_str(error).unwrap();
+        assert_eq!(error["type"], "error");
+        assert_eq!(error["code"], "principal_context_revoked");
+        assert_eq!(
+            error["message"],
+            "delegated principal context is no longer valid"
+        );
+        assert!(matches!(frames[1], Message::Close(_)));
+    }
+
+    #[tokio::test]
+    async fn websocket_rejects_revocation_at_authentication_and_heartbeat() {
+        let (Ok(database_url), Ok(redis_url)) =
+            (env::var("TEST_DATABASE_URL"), env::var("TEST_REDIS_URL"))
+        else {
+            eprintln!(
+                "TEST_DATABASE_URL or TEST_REDIS_URL is not set; skipping signaling integration test"
+            );
+            return;
+        };
+        let store = PgStore::connect(&database_url, 4).await.unwrap();
+        store.migrate().await.unwrap();
+        let organization_id = Uuid::new_v4();
+        let project_id = Uuid::new_v4();
+        let service_instance_id = Uuid::new_v4();
+        let room_id = Uuid::now_v7();
+        store
+            .reconcile_service_instance(ServiceInstanceReconcile {
+                jwt_id: Uuid::now_v7(),
+                organization_id,
+                project_id,
+                service_instance_id,
+                principal_id: Uuid::new_v4(),
+                generation: 1,
+                name: format!("signaling-revocation-{service_instance_id}"),
+                spec: json!({}),
+            })
+            .await
+            .unwrap();
+        let now = chrono::Utc::now();
+        store
+            .create_room(NewRoom {
+                id: room_id,
+                organization_id,
+                project_id,
+                service_instance_id,
+                name: format!("room-{room_id}"),
+                provider_room_name: None,
+                mode: SessionMode::P2p,
+                state: RoomState::Ready,
+                max_participants: 2,
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let redis = RedisBackend::direct(&redis_url).unwrap();
+        redis.ping().await.unwrap();
+        let state = AppState {
+            store: store.clone(),
+            principal_auth: PrincipalAuthenticator::new(
+                "heterocloud",
+                "heterocloud-flow-data",
+                PRINCIPAL_SECRET,
+                Duration::from_mins(5),
+            )
+            .unwrap(),
+            redis: Arc::new(redis.clone()),
+            rate_limiter: Arc::new(IpRateLimiter::new(
+                redis,
+                RateLimitPolicy::new(1_000, 1_000).unwrap(),
+            )),
+            trusted_proxies: TrustedProxies::from_csv("127.0.0.0/8").unwrap(),
+            auth_timeout: Duration::from_secs(2),
+            heartbeat_interval: Duration::from_millis(50),
+        };
+        let signal_route = Router::new()
+            .route("/v1/signal/{room_id}", get(signal_upgrade))
+            .route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                enforce_ip_rate_limit,
+            ));
+        let app = Router::new()
+            .route("/health/live", get(live))
+            .route("/health/ready", get(ready))
+            .merge(signal_route)
+            .with_state(state);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let url = format!("ws://{address}/v1/signal/{room_id}");
+        let expires_at = u64::try_from((now + chrono::Duration::minutes(5)).timestamp()).unwrap();
+
+        let revoked_context_id = Uuid::now_v7();
+        store
+            .revoke_principal_context(
+                organization_id,
+                project_id,
+                service_instance_id,
+                revoked_context_id,
+                i64::try_from(expires_at).unwrap(),
+            )
+            .await
+            .unwrap();
+        let (mut revoked_socket, _) = connect_async(&url).await.unwrap();
+        revoked_socket
+            .send(ClientMessage::Text(
+                authentication_frame(
+                    organization_id,
+                    project_id,
+                    service_instance_id,
+                    revoked_context_id,
+                    expires_at,
+                )
+                .into(),
+            ))
+            .await
+            .unwrap();
+        assert_protocol_error(
+            &mut revoked_socket,
+            "principal_context_revoked",
+            Duration::from_secs(2),
+        )
+        .await;
+        assert!(matches!(
+            revoked_socket.next().await,
+            Some(Ok(ClientMessage::Close(_)))
+        ));
+
+        let active_context_id = Uuid::now_v7();
+        let (mut active_socket, _) = connect_async(&url).await.unwrap();
+        active_socket
+            .send(ClientMessage::Text(
+                authentication_frame(
+                    organization_id,
+                    project_id,
+                    service_instance_id,
+                    active_context_id,
+                    expires_at,
+                )
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let authenticated = tokio::time::timeout(Duration::from_secs(2), active_socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let ClientMessage::Text(authenticated) = authenticated else {
+            panic!("expected authenticated text frame");
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&authenticated).unwrap()["type"],
+            "authenticated"
+        );
+
+        store
+            .revoke_principal_context(
+                organization_id,
+                project_id,
+                service_instance_id,
+                active_context_id,
+                i64::try_from(expires_at).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_protocol_error(
+            &mut active_socket,
+            "principal_context_revoked",
+            Duration::from_secs(2),
+        )
+        .await;
+        assert!(matches!(
+            active_socket.next().await,
+            Some(Ok(ClientMessage::Close(_)))
+        ));
+        server.abort();
+    }
+
+    fn authentication_frame(
+        organization_id: Uuid,
+        project_id: Uuid,
+        service_instance_id: Uuid,
+        context_id: Uuid,
+        expires_at: u64,
+    ) -> String {
+        let issued_at = u64::try_from(chrono::Utc::now().timestamp()).unwrap();
+        let signed = SignedPrincipal {
+            issuer: "heterocloud".into(),
+            audience: "heterocloud-flow-data".into(),
+            organization_id,
+            project_id,
+            service_instance_id,
+            principal_id: Uuid::new_v4(),
+            permissions: BTreeSet::from(["flow.signal.connect".into()]),
+            issued_at,
+            expires_at,
+            context_id,
+        };
+        let principal_context = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&signed).unwrap());
+        let timestamp = issued_at.to_string();
+        let mut mac = Hmac::<Sha256>::new_from_slice(PRINCIPAL_SECRET).unwrap();
+        mac.update(timestamp.as_bytes());
+        mac.update(b".");
+        mac.update(principal_context.as_bytes());
+        let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+        json!({
+            "type": "signed_context",
+            "principal_context": principal_context,
+            "timestamp": timestamp,
+            "signature": signature,
+        })
+        .to_string()
+    }
+
+    async fn assert_protocol_error(
+        socket: &mut WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        expected_code: &str,
+        timeout: Duration,
+    ) {
+        let message = tokio::time::timeout(timeout, socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let ClientMessage::Text(message) = message else {
+            panic!("expected text protocol error");
+        };
+        let error: serde_json::Value = serde_json::from_str(&message).unwrap();
+        assert_eq!(error["type"], "error");
+        assert_eq!(error["code"], expected_code);
     }
 }

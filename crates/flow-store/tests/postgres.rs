@@ -2,8 +2,9 @@ use std::{env, time::Duration};
 
 use chrono::Utc;
 use flow_domain::{
-    NewAuditEvent, NewRoom, NewSignalingConnection, NewTicket, NewUsageEvent, RoomState,
-    ServiceInstanceDelete, ServiceInstancePhase, ServiceInstanceReconcile, SessionMode,
+    NewAuditEvent, NewRoom, NewSignalingConnection, NewTicket, NewUsageEvent,
+    PRINCIPAL_CONTEXT_CLOCK_SKEW, RoomState, ServiceInstanceDelete, ServiceInstancePhase,
+    ServiceInstanceReconcile, SessionMode,
 };
 use flow_store::{PgStore, StoreError};
 use serde_json::json;
@@ -359,6 +360,197 @@ async fn audit_records_principal_context_id() {
 }
 
 #[tokio::test]
+async fn principal_context_revocation_is_scoped_idempotent_bounded_and_expires() {
+    let _guard = DATABASE_TEST_LOCK.lock().await;
+    let Some(store) = test_store(4).await else {
+        return;
+    };
+    let scope = provision_scope(&store, None).await;
+    let other_scope = provision_scope(&store, None).await;
+    let context_id = Uuid::now_v7();
+    let now = Utc::now().timestamp();
+
+    assert!(
+        !store
+            .principal_context_is_revoked(
+                scope.organization_id,
+                scope.project_id,
+                scope.service_instance_id,
+                context_id,
+            )
+            .await
+            .unwrap()
+    );
+    store
+        .revoke_principal_context(
+            scope.organization_id,
+            scope.project_id,
+            scope.service_instance_id,
+            context_id,
+            now + 300,
+        )
+        .await
+        .unwrap();
+    store
+        .revoke_principal_context(
+            scope.organization_id,
+            scope.project_id,
+            scope.service_instance_id,
+            context_id,
+            now + 240,
+        )
+        .await
+        .unwrap();
+    assert!(
+        store
+            .principal_context_is_revoked(
+                scope.organization_id,
+                scope.project_id,
+                scope.service_instance_id,
+                context_id,
+            )
+            .await
+            .unwrap()
+    );
+    let (count, stored_expiry): (i64, chrono::DateTime<Utc>) = sqlx::query_as(
+        r"
+        SELECT count(*) OVER (), expires_at
+        FROM flow_principal_context_revocations
+        WHERE context_id = $1
+        ",
+    )
+    .bind(context_id)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(
+        stored_expiry.timestamp(),
+        now + 300 + i64::try_from(PRINCIPAL_CONTEXT_CLOCK_SKEW.as_secs()).unwrap()
+    );
+
+    assert!(matches!(
+        store
+            .revoke_principal_context(
+                Uuid::new_v4(),
+                scope.project_id,
+                scope.service_instance_id,
+                Uuid::now_v7(),
+                now + 300,
+            )
+            .await,
+        Err(StoreError::Conflict(
+            "service instance scope does not match provider claims"
+        ))
+    ));
+    assert!(matches!(
+        store
+            .revoke_principal_context(
+                other_scope.organization_id,
+                other_scope.project_id,
+                other_scope.service_instance_id,
+                context_id,
+                now + 300,
+            )
+            .await,
+        Err(StoreError::Conflict(
+            "principal context is already revoked in another scope"
+        ))
+    ));
+    assert!(matches!(
+        store
+            .revoke_principal_context(
+                scope.organization_id,
+                scope.project_id,
+                scope.service_instance_id,
+                Uuid::now_v7(),
+                now + 360,
+            )
+            .await,
+        Err(StoreError::RevocationExpiryTooDistant)
+    ));
+
+    let delayed_context_id = Uuid::now_v7();
+    store
+        .revoke_principal_context(
+            scope.organization_id,
+            scope.project_id,
+            scope.service_instance_id,
+            delayed_context_id,
+            now - 1,
+        )
+        .await
+        .unwrap();
+    let delayed_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM flow_principal_context_revocations WHERE context_id = $1",
+    )
+    .bind(delayed_context_id)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(delayed_rows, 1);
+    assert!(
+        store
+            .principal_context_is_revoked(
+                scope.organization_id,
+                scope.project_id,
+                scope.service_instance_id,
+                delayed_context_id,
+            )
+            .await
+            .unwrap()
+    );
+
+    let fully_expired_context_id = Uuid::now_v7();
+    store
+        .revoke_principal_context(
+            scope.organization_id,
+            scope.project_id,
+            scope.service_instance_id,
+            fully_expired_context_id,
+            now - 60,
+        )
+        .await
+        .unwrap();
+    let fully_expired_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM flow_principal_context_revocations WHERE context_id = $1",
+    )
+    .bind(fully_expired_context_id)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(fully_expired_rows, 0);
+
+    let expired_context_id = Uuid::now_v7();
+    sqlx::query(
+        r"
+        INSERT INTO flow_principal_context_revocations (
+            context_id, organization_id, project_id, service_instance_id, expires_at
+        )
+        VALUES ($1, $2, $3, $4, now() - interval '1 second')
+        ",
+    )
+    .bind(expired_context_id)
+    .bind(scope.organization_id)
+    .bind(scope.project_id)
+    .bind(scope.service_instance_id)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    assert!(
+        !store
+            .principal_context_is_revoked(
+                scope.organization_id,
+                scope.project_id,
+                scope.service_instance_id,
+                expired_context_id,
+            )
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
 async fn delete_is_scoped_idempotent_and_leaves_a_tombstone() {
     let _guard = DATABASE_TEST_LOCK.lock().await;
     let Some(store) = test_store(4).await else {
@@ -666,6 +858,7 @@ async fn test_store(max_connections: u32) -> Option<PgStore> {
     sqlx::query(
         r"
         TRUNCATE TABLE
+            flow_principal_context_revocations,
             flow_delete_token_receipts,
             flow_delete_operations,
             flow_signaling_connections,
