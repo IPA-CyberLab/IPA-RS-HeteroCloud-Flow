@@ -4,7 +4,7 @@ use chrono::Utc;
 use flow_domain::{
     MAX_ACTIVE_ROOMS_PER_PRINCIPAL, NewAuditEvent, NewRoom, NewSignalingConnection, NewTicket,
     NewUsageEvent, PRINCIPAL_CONTEXT_CLOCK_SKEW, RoomState, ServiceInstanceDelete,
-    ServiceInstancePhase, ServiceInstanceReconcile, SessionMode,
+    ServiceInstancePhase, ServiceInstanceReconcile, SessionMode, SignalingPeer,
 };
 use flow_store::{PgStore, RoomActivityCandidate, StoreError};
 use serde_json::json;
@@ -323,6 +323,90 @@ async fn principal_room_limit_is_atomic_and_independent_from_service_limit() {
         .unwrap()
         .expect("an eligible match group");
     assert_eq!(candidate.room.metadata["queue"], eligible_queue);
+}
+
+#[tokio::test]
+async fn signaling_open_returns_only_live_existing_peers() {
+    let _guard = DATABASE_TEST_LOCK.lock().await;
+    let Some(store) = test_store(4).await else {
+        return;
+    };
+    let scope = provision_scope(&store, None).await;
+    let room_id = Uuid::now_v7();
+    store
+        .create_room(NewRoom {
+            id: room_id,
+            organization_id: scope.organization_id,
+            project_id: scope.project_id,
+            service_instance_id: scope.service_instance_id,
+            created_by_principal_id: Uuid::new_v4(),
+            name: format!("peer-discovery-{room_id}"),
+            provider_room_name: None,
+            mode: SessionMode::P2p,
+            state: RoomState::Ready,
+            max_participants: 3,
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+
+    let first = SignalingPeer {
+        connection_id: Uuid::now_v7(),
+        principal_id: Uuid::new_v4(),
+    };
+    let first_peers = store
+        .open_signaling_connection(NewSignalingConnection {
+            connection_id: first.connection_id,
+            organization_id: scope.organization_id,
+            project_id: scope.project_id,
+            service_instance_id: scope.service_instance_id,
+            room_id,
+            principal_id: first.principal_id,
+        })
+        .await
+        .unwrap();
+    assert!(first_peers.is_empty());
+
+    let second = SignalingPeer {
+        connection_id: Uuid::now_v7(),
+        principal_id: Uuid::new_v4(),
+    };
+    let second_peers = store
+        .open_signaling_connection(NewSignalingConnection {
+            connection_id: second.connection_id,
+            organization_id: scope.organization_id,
+            project_id: scope.project_id,
+            service_instance_id: scope.service_instance_id,
+            room_id,
+            principal_id: second.principal_id,
+        })
+        .await
+        .unwrap();
+    assert_eq!(second_peers, [first]);
+
+    sqlx::query(
+        "UPDATE flow_signaling_connections SET last_seen_at = now() - interval '1 minute' WHERE connection_id = $1",
+    )
+    .bind(first.connection_id)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    let third = SignalingPeer {
+        connection_id: Uuid::now_v7(),
+        principal_id: Uuid::new_v4(),
+    };
+    let third_peers = store
+        .open_signaling_connection(NewSignalingConnection {
+            connection_id: third.connection_id,
+            organization_id: scope.organization_id,
+            project_id: scope.project_id,
+            service_instance_id: scope.service_instance_id,
+            room_id,
+            principal_id: third.principal_id,
+        })
+        .await
+        .unwrap();
+    assert_eq!(third_peers, [second]);
 }
 
 #[tokio::test]

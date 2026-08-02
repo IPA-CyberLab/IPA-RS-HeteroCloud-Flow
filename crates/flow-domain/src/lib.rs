@@ -26,6 +26,7 @@ pub const PRINCIPAL_CONTEXT_CLOCK_SKEW: Duration = Duration::from_secs(15);
 
 pub const SIGNALING_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 pub const SIGNALING_CONNECTION_STALE_AFTER: Duration = Duration::from_secs(45);
+pub const SIGNALING_PROTOCOL_ID: &str = "flow-signaling.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrincipalContext {
@@ -90,6 +91,79 @@ impl FromStr for SessionMode {
             }),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SignalingAuthenticationFrame {
+    SignedContext {
+        principal_context: String,
+        timestamp: String,
+        signature: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SignalingSignalKind {
+    Offer,
+    Answer,
+    IceCandidate,
+    Renegotiate,
+    Leave,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SignalingClientSignal {
+    #[serde(rename = "type")]
+    pub kind: SignalingSignalKind,
+    pub target: Uuid,
+    pub payload: Value,
+}
+
+impl SignalingClientSignal {
+    /// Validates the opaque application signaling payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError`] when `payload` is not a JSON object.
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        ensure_json_object("payload", &self.payload)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SignalingPeer {
+    pub connection_id: Uuid,
+    pub principal_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SignalingServerFrame {
+    Authenticated {
+        connection_id: Uuid,
+        room_id: Uuid,
+        principal_id: Uuid,
+        peers: Vec<SignalingPeer>,
+    },
+    PeerJoined {
+        peer: SignalingPeer,
+    },
+    PeerLeft {
+        peer: SignalingPeer,
+    },
+    Signal {
+        kind: SignalingSignalKind,
+        sender: Uuid,
+        payload: Value,
+        sent_at: DateTime<Utc>,
+    },
+    Error {
+        code: String,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -621,13 +695,14 @@ mod tests {
     use std::collections::BTreeSet;
 
     use chrono::{Duration, Utc};
-    use serde_json::json;
+    use serde_json::{Value, json};
     use uuid::Uuid;
 
     use super::{
         DEFAULT_MAX_ROOMS, DEFAULT_RATE_LIMIT_BURST, DEFAULT_RATE_LIMIT_REQUESTS_PER_SECOND,
         NewTicket, PrincipalContext, ServiceInstanceReconcile, ServiceRateLimit, SessionMode,
-        ValidationError, rate_limit_from_spec, room_limit_from_spec,
+        SignalingAuthenticationFrame, SignalingClientSignal, SignalingPeer, SignalingServerFrame,
+        SignalingSignalKind, ValidationError, rate_limit_from_spec, room_limit_from_spec,
     };
 
     #[test]
@@ -717,6 +792,56 @@ mod tests {
             Err(ValidationError::InvalidCharacters {
                 field: "queue_name"
             })
+        );
+    }
+
+    #[test]
+    fn signaling_contract_serializes_authentication_and_presence_frames() {
+        let authentication = SignalingAuthenticationFrame::SignedContext {
+            principal_context: "principal".into(),
+            timestamp: "1700000000".into(),
+            signature: "signature".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(authentication).unwrap(),
+            json!({
+                "type": "signed_context",
+                "principal_context": "principal",
+                "timestamp": "1700000000",
+                "signature": "signature"
+            })
+        );
+
+        let peer = SignalingPeer {
+            connection_id: Uuid::new_v4(),
+            principal_id: Uuid::new_v4(),
+        };
+        assert_eq!(
+            serde_json::to_value(SignalingServerFrame::PeerJoined { peer }).unwrap(),
+            json!({"type": "peer_joined", "peer": peer})
+        );
+    }
+
+    #[test]
+    fn signaling_contract_rejects_unknown_fields_and_non_object_payloads() {
+        assert!(
+            serde_json::from_value::<SignalingAuthenticationFrame>(json!({
+                "type": "signed_context",
+                "principal_context": "principal",
+                "timestamp": "1700000000",
+                "signature": "signature",
+                "unexpected": true
+            }))
+            .is_err()
+        );
+        let signal = SignalingClientSignal {
+            kind: SignalingSignalKind::IceCandidate,
+            target: Uuid::new_v4(),
+            payload: Value::Null,
+        };
+        assert_eq!(
+            signal.validate(),
+            Err(ValidationError::ExpectedObject { field: "payload" })
         );
     }
 

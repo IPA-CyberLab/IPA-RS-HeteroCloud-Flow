@@ -2,6 +2,7 @@ mod config;
 mod coturn_metrics;
 mod error;
 mod routes;
+mod signaling_asyncapi;
 
 use std::{env, net::SocketAddr, process::ExitCode, sync::Arc};
 

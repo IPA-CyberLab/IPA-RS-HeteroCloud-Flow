@@ -113,10 +113,13 @@ share queues, tickets, rooms, audit events, or usage idempotency keys.
 
 ## API
 
-The generated OpenAPI 3.1 schema is served at `/openapi.json`, and the vendored
-interactive documentation is served at `/docs/`. The schema contains only the
-customer data-plane API; provider-only `/internal/*` operations are excluded.
-Its security requirement models all three `X-Flow-*` headers as mandatory.
+The generated OpenAPI 3.1 schema is served at `/openapi.json`, the complete
+AsyncAPI 3.1 P2P WebSocket contract is served at `/asyncapi.json`, and the
+vendored interactive REST documentation is served at `/docs/`. OpenAPI links
+the AsyncAPI document and includes the signaling frame schemas. The REST schema
+contains only the customer data-plane API; provider-only `/internal/*`
+operations are excluded. Its security requirement models all three `X-Flow-*`
+headers as mandatory.
 
 | Method and path | Permission | Result |
 | --- | --- | --- |
@@ -146,13 +149,14 @@ fail-closed with `503`, and readiness also verifies the limiter backend.
 cannot prepend a forged address. Direct callers and untrusted proxies are
 limited by their socket peer address.
 
-`p2p` join responses contain an ordered `connection.urls` array of WSS Flow
-signaling URLs, with `/v1/signal/{room_id}` appended to every origin. `sfu`
-responses contain an ordered array of public LiveKit WSS URLs, a short-lived
-participant JWT, and TURN credentials. In both cases clients try the first URL
-as primary and the remaining URLs in order after connection failure. TURN
-credentials contain every configured UDP/TCP endpoint. LiveKit keys and TURN
-secrets are shared by replicas, but neither secret is ever returned.
+`p2p` join responses identify `flow-signaling.v1`, link every HA AsyncAPI
+document, and contain an ordered `connection.urls` array of WSS Flow signaling
+URLs with `/v1/signal/{room_id}` appended to every origin. `sfu` responses
+contain an ordered array of public LiveKit WSS URLs, a short-lived participant
+JWT, and TURN credentials. In both cases clients try the first URL as primary
+and the remaining URLs in order after connection failure. TURN credentials
+contain every configured UDP/TCP endpoint. LiveKit keys and TURN secrets are
+shared by replicas, but neither secret is ever returned.
 
 Room capacity has two independent bounds. The service spec's `max_rooms`
 controls total concurrent rooms for the service, while the system always caps
@@ -169,7 +173,10 @@ deletion waits for those short-lived credentials to expire so a valid token
 cannot recreate an already-deleted room. The overview publishes the fixed
 timeout as `room_idle_timeout_seconds`.
 
-The first P2P WebSocket frame must carry the separate signed principal context:
+The first P2P WebSocket text frame must carry the separate signed principal
+context. Copy the three values returned by HeteroCloud without modification:
+`X-Flow-Principal` becomes `principal_context`, `X-Flow-Timestamp` becomes
+`timestamp`, and `X-Flow-Signature` becomes `signature`.
 
 ```json
 {
@@ -179,6 +186,45 @@ The first P2P WebSocket frame must carry the separate signed principal context:
   "signature":"..."
 }
 ```
+
+For JavaScript clients, `issued` is the short-lived access response and `join`
+is the P2P room join response:
+
+```js
+const socket = new WebSocket(join.connection.urls[0]);
+socket.addEventListener("open", () => {
+  socket.send(JSON.stringify({
+    type: "signed_context",
+    principal_context: issued.headers["x-flow-principal"],
+    timestamp: issued.headers["x-flow-timestamp"],
+    signature: issued.headers["x-flow-signature"],
+  }));
+});
+```
+
+Flow replies with the authenticated connection and every live peer already in
+the room. Each peer includes a connection UUID so multiple connections using
+one principal can be tracked independently:
+
+```json
+{
+  "type":"authenticated",
+  "connection_id":"connection-uuid",
+  "room_id":"room-uuid",
+  "principal_id":"this-principal-uuid",
+  "peers":[
+    {
+      "connection_id":"peer-connection-uuid",
+      "principal_id":"peer-principal-uuid"
+    }
+  ]
+}
+```
+
+Later arrivals and departures produce `peer_joined` and `peer_left` frames
+with the same `peer` object. Matchmaking clients can also discover destinations
+from `assignment.peer_principal_ids`. Applications that create rooms directly
+can rely entirely on the WebSocket presence frames.
 
 Subsequent frames are targeted `offer`, `answer`, `ice_candidate`,
 `renegotiate`, or `leave` messages:
@@ -190,6 +236,15 @@ Subsequent frames are targeted `offer`, `answer`, `ice_candidate`,
   "payload":{"sdp":"v=0..."}
 }
 ```
+
+Flow transports `payload` as an opaque JSON object. SDP and ICE field naming is
+therefore an application contract between the two peers; examples in
+`/asyncapi.json` use `payload.sdp` and the browser-compatible ICE fields
+`candidate`, `sdpMid`, and `sdpMLineIndex`. A relayed frame has `type: "signal"`,
+the original signal type in `kind`, the source `sender`, the unchanged
+`payload`, and `sent_at`. Protocol failures have `type: "error"`, `code`, and
+`message`; authentication failures and session revocation are followed by a
+WebSocket close frame.
 
 ## Local Development
 

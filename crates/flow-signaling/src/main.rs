@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     env,
     net::{IpAddr, SocketAddr},
     process::ExitCode,
@@ -27,7 +28,9 @@ use flow_auth::{
 };
 use flow_domain::{
     NewAuditEvent, NewSignalingConnection, NewUsageEvent, PrincipalContext, RoomState,
-    SIGNALING_HEARTBEAT_INTERVAL, SessionMode,
+    SIGNALING_HEARTBEAT_INTERVAL, SessionMode, SignalingAuthenticationFrame as AuthenticationFrame,
+    SignalingClientSignal as ClientSignal, SignalingPeer, SignalingServerFrame as ServerFrame,
+    SignalingSignalKind as SignalKind,
 };
 use flow_rate_limit::{
     IpRateLimiter, RateLimitDecision, RateLimitPolicy, RedisBackend, TrustedProxies,
@@ -60,6 +63,7 @@ struct ClientIp(IpAddr);
 struct RelaySession {
     principal: PrincipalContext,
     connection_id: Uuid,
+    known_peer_connections: HashSet<Uuid>,
     store: PgStore,
     heartbeat_interval: Duration,
 }
@@ -429,7 +433,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid, cl
         warn!(%error, "failed to subscribe to signaling channel");
         return;
     }
-    let publisher = match client.get_multiplexed_async_connection().await {
+    let mut publisher = match client.get_multiplexed_async_connection().await {
         Ok(connection) => connection,
         Err(error) => {
             warn!(%error, "failed to open Redis publisher");
@@ -438,7 +442,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid, cl
     };
 
     let connection_id = Uuid::now_v7();
-    if let Err(error) = state
+    let peers = match state
         .store
         .open_signaling_connection(NewSignalingConnection {
             connection_id,
@@ -450,25 +454,51 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid, cl
         })
         .await
     {
-        warn!(%error, "failed to persist signaling connection");
+        Ok(peers) => peers,
+        Err(error) => {
+            warn!(%error, "failed to persist signaling connection");
+            send_protocol_error(
+                &mut socket,
+                "signaling_unavailable",
+                "signaling backend is unavailable",
+            )
+            .await;
+            return;
+        }
+    };
+    let peer = SignalingPeer {
+        connection_id,
+        principal_id: principal.principal_id,
+    };
+    let known_peer_connections = peers.iter().map(|peer| peer.connection_id).collect();
+    let authenticated = ServerFrame::Authenticated {
+        connection_id,
+        room_id,
+        principal_id: principal.principal_id,
+        peers,
+    };
+    if send_server_frame(&mut socket, &authenticated)
+        .await
+        .is_err()
+    {
+        close_and_publish_departure(&state.store, &mut publisher, &channel, peer).await;
+        return;
+    }
+    if let Err(error) = publish_frame(
+        &mut publisher,
+        &channel,
+        &PublishedFrame::PeerJoined { peer },
+    )
+    .await
+    {
+        warn!(%error, "failed to publish signaling presence");
         send_protocol_error(
             &mut socket,
             "signaling_unavailable",
             "signaling backend is unavailable",
         )
         .await;
-        return;
-    }
-    let authenticated = ServerFrame::Authenticated {
-        connection_id,
-        room_id,
-        principal_id: principal.principal_id,
-    };
-    if send_server_frame(&mut socket, &authenticated)
-        .await
-        .is_err()
-    {
-        close_signaling_connection(&state.store, connection_id).await;
+        close_and_publish_departure(&state.store, &mut publisher, &channel, peer).await;
         return;
     }
     persist_open_audit(&state.store, &principal, room_id, connection_id).await;
@@ -481,12 +511,12 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid, cl
         RelaySession {
             principal: principal.clone(),
             connection_id,
+            known_peer_connections,
             store: state.store.clone(),
             heartbeat_interval: state.heartbeat_interval,
         },
     )
     .await;
-    close_signaling_connection(&state.store, connection_id).await;
     persist_connection_usage(
         &state.store,
         &principal,
@@ -549,6 +579,7 @@ async fn relay(
     let RelaySession {
         principal,
         connection_id,
+        mut known_peer_connections,
         store,
         heartbeat_interval,
     } = session;
@@ -630,8 +661,8 @@ async fn relay(
                             Ok(signal) => signal,
                             Err(message) => {
                                 let frame = ServerFrame::Error {
-                                    code: "invalid_signal",
-                                    message: &message,
+                                    code: "invalid_signal".into(),
+                                    message,
                                 };
                                 if send_frame_to_sink(&mut sender, &frame).await.is_err() {
                                     break;
@@ -639,7 +670,7 @@ async fn relay(
                                 continue;
                             }
                         };
-                        let outbound_signal = PublishedSignal {
+                        let outbound_signal = PublishedFrame::Signal {
                             kind: signal.kind,
                             sender: principal.principal_id,
                             target: signal.target,
@@ -647,12 +678,9 @@ async fn relay(
                             connection_id,
                             sent_at: Utc::now(),
                         };
-                        let Ok(serialized) = serde_json::to_string(&outbound_signal) else {
-                            continue;
-                        };
-                        let result: redis::RedisResult<usize> =
-                            publisher.publish(&channel, serialized).await;
-                        if let Err(error) = result {
+                        if let Err(error) =
+                            publish_frame(&mut publisher, &channel, &outbound_signal).await
+                        {
                             warn!(%error, "failed to publish signaling frame");
                             break;
                         }
@@ -675,27 +703,55 @@ async fn relay(
                     Ok(payload) => payload,
                     Err(_) => continue,
                 };
-                let signal: PublishedSignal = match serde_json::from_str(&payload) {
-                    Ok(signal) => signal,
+                let relay_frame: PublishedFrame = match serde_json::from_str(&payload) {
+                    Ok(relay_frame) => relay_frame,
                     Err(_) => continue,
                 };
-                if signal.connection_id == connection_id
-                    || signal.target != principal.principal_id
-                {
-                    continue;
-                }
-                let frame = ServerFrame::Signal {
-                    kind: signal.kind,
-                    sender: signal.sender,
-                    payload: signal.payload,
-                    sent_at: signal.sent_at,
+                let frame = match relay_frame {
+                    PublishedFrame::Signal {
+                        kind,
+                        sender,
+                        target,
+                        payload,
+                        connection_id: sender_connection_id,
+                        sent_at,
+                    } if sender_connection_id != connection_id
+                        && target == principal.principal_id =>
+                    {
+                        Some(ServerFrame::Signal {
+                            kind,
+                            sender,
+                            payload,
+                            sent_at,
+                        })
+                    }
+                    PublishedFrame::PeerJoined { peer }
+                        if peer.connection_id != connection_id
+                            && known_peer_connections.insert(peer.connection_id) =>
+                    {
+                        Some(ServerFrame::PeerJoined { peer })
+                    }
+                    PublishedFrame::PeerLeft { peer }
+                        if peer.connection_id != connection_id
+                            && known_peer_connections.remove(&peer.connection_id) =>
+                    {
+                        Some(ServerFrame::PeerLeft { peer })
+                    }
+                    _ => None,
                 };
-                if send_frame_to_sink(&mut sender, &frame).await.is_err() {
+                if let Some(frame) = frame
+                    && send_frame_to_sink(&mut sender, &frame).await.is_err()
+                {
                     break;
                 }
             }
         }
     }
+    let peer = SignalingPeer {
+        connection_id,
+        principal_id: principal.principal_id,
+    };
+    close_and_publish_departure(&store, &mut publisher, &channel, peer).await;
     count
 }
 
@@ -705,21 +761,39 @@ async fn close_signaling_connection(store: &PgStore, connection_id: Uuid) {
     }
 }
 
+async fn close_and_publish_departure(
+    store: &PgStore,
+    publisher: &mut redis::aio::MultiplexedConnection,
+    channel: &str,
+    peer: SignalingPeer,
+) {
+    close_signaling_connection(store, peer.connection_id).await;
+    if let Err(error) = publish_frame(publisher, channel, &PublishedFrame::PeerLeft { peer }).await
+    {
+        warn!(%error, "failed to publish signaling departure");
+    }
+}
+
 fn parse_signal(text: &str) -> Result<ClientSignal, String> {
     let signal: ClientSignal =
         serde_json::from_str(text).map_err(|_| "signal frame is invalid".to_owned())?;
-    if !signal.payload.is_object() {
-        return Err("payload must be a JSON object".into());
-    }
+    signal.validate().map_err(|error| error.to_string())?;
     Ok(signal)
 }
 
 async fn send_protocol_error(socket: &mut WebSocket, code: &'static str, message: &str) {
-    let _ = send_server_frame(socket, &ServerFrame::Error { code, message }).await;
+    let _ = send_server_frame(
+        socket,
+        &ServerFrame::Error {
+            code: code.into(),
+            message: message.into(),
+        },
+    )
+    .await;
     let _ = socket.send(Message::Close(None)).await;
 }
 
-async fn send_server_frame(socket: &mut WebSocket, frame: &ServerFrame<'_>) -> Result<(), ()> {
+async fn send_server_frame(socket: &mut WebSocket, frame: &ServerFrame) -> Result<(), ()> {
     let serialized = serde_json::to_string(frame).map_err(|_| ())?;
     socket
         .send(Message::Text(serialized.into()))
@@ -727,7 +801,7 @@ async fn send_server_frame(socket: &mut WebSocket, frame: &ServerFrame<'_>) -> R
         .map_err(|_| ())
 }
 
-async fn send_frame_to_sink<S>(sink: &mut S, frame: &ServerFrame<'_>) -> Result<(), ()>
+async fn send_frame_to_sink<S>(sink: &mut S, frame: &ServerFrame) -> Result<(), ()>
 where
     S: futures_util::Sink<Message> + Unpin,
 {
@@ -741,8 +815,28 @@ async fn send_protocol_error_to_sink<S>(sink: &mut S, code: &'static str, messag
 where
     S: futures_util::Sink<Message> + Unpin,
 {
-    let _ = send_frame_to_sink(sink, &ServerFrame::Error { code, message }).await;
+    let _ = send_frame_to_sink(
+        sink,
+        &ServerFrame::Error {
+            code: code.into(),
+            message: message.into(),
+        },
+    )
+    .await;
     let _ = sink.send(Message::Close(None)).await;
+}
+
+async fn publish_frame(
+    publisher: &mut redis::aio::MultiplexedConnection,
+    channel: &str,
+    frame: &PublishedFrame,
+) -> Result<(), String> {
+    let serialized = serde_json::to_string(frame).map_err(|error| error.to_string())?;
+    let _: usize = publisher
+        .publish(channel, serialized)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn channel_name(principal: &PrincipalContext, room_id: Uuid) -> String {
@@ -834,62 +928,22 @@ impl Config {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum AuthenticationFrame {
-    SignedContext {
-        principal_context: String,
-        timestamp: String,
-        signature: String,
-    },
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum SignalKind {
-    Offer,
-    Answer,
-    IceCandidate,
-    Renegotiate,
-    Leave,
-}
-
-#[derive(Deserialize)]
-struct ClientSignal {
-    #[serde(rename = "type")]
-    kind: SignalKind,
-    target: Uuid,
-    payload: Value,
-}
-
 #[derive(Serialize, Deserialize)]
-struct PublishedSignal {
-    #[serde(rename = "type")]
-    kind: SignalKind,
-    sender: Uuid,
-    target: Uuid,
-    payload: Value,
-    connection_id: Uuid,
-    sent_at: chrono::DateTime<Utc>,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ServerFrame<'a> {
-    Authenticated {
-        connection_id: Uuid,
-        room_id: Uuid,
-        principal_id: Uuid,
-    },
+#[serde(tag = "event", rename_all = "snake_case")]
+enum PublishedFrame {
     Signal {
         kind: SignalKind,
         sender: Uuid,
+        target: Uuid,
         payload: Value,
+        connection_id: Uuid,
         sent_at: chrono::DateTime<Utc>,
     },
-    Error {
-        code: &'static str,
-        message: &'a str,
+    PeerJoined {
+        peer: SignalingPeer,
+    },
+    PeerLeft {
+        peer: SignalingPeer,
     },
 }
 
@@ -1054,7 +1108,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn websocket_rejects_revocation_at_authentication_and_heartbeat() {
+    async fn websocket_relays_presence_and_signals_and_enforces_revocation() {
         let (Ok(database_url), Ok(redis_url)) =
             (env::var("TEST_DATABASE_URL"), env::var("TEST_REDIS_URL"))
         else {
@@ -1156,6 +1210,7 @@ mod tests {
             .await
             .unwrap();
         let (mut revoked_socket, _) = connect_async(&url).await.unwrap();
+        let revoked_principal_id = Uuid::new_v4();
         revoked_socket
             .send(ClientMessage::Text(
                 authentication_frame(
@@ -1163,6 +1218,7 @@ mod tests {
                     project_id,
                     service_instance_id,
                     revoked_context_id,
+                    revoked_principal_id,
                     expires_at,
                 )
                 .into(),
@@ -1181,6 +1237,7 @@ mod tests {
         ));
 
         let active_context_id = Uuid::now_v7();
+        let active_principal_id = Uuid::new_v4();
         let (mut active_socket, _) = connect_async(&url).await.unwrap();
         active_socket
             .send(ClientMessage::Text(
@@ -1189,24 +1246,77 @@ mod tests {
                     project_id,
                     service_instance_id,
                     active_context_id,
+                    active_principal_id,
                     expires_at,
                 )
                 .into(),
             ))
             .await
             .unwrap();
-        let authenticated = tokio::time::timeout(Duration::from_secs(2), active_socket.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        let ClientMessage::Text(authenticated) = authenticated else {
-            panic!("expected authenticated text frame");
-        };
+        let authenticated = next_json_frame(&mut active_socket).await;
+        assert_eq!(authenticated["type"], "authenticated");
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&authenticated).unwrap()["type"],
-            "authenticated"
+            authenticated["principal_id"],
+            active_principal_id.to_string()
         );
+        assert_eq!(authenticated["peers"].as_array().map(Vec::len), Some(0));
+
+        let peer_context_id = Uuid::now_v7();
+        let peer_principal_id = Uuid::new_v4();
+        let (mut peer_socket, _) = connect_async(&url).await.unwrap();
+        peer_socket
+            .send(ClientMessage::Text(
+                authentication_frame(
+                    organization_id,
+                    project_id,
+                    service_instance_id,
+                    peer_context_id,
+                    peer_principal_id,
+                    expires_at,
+                )
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let peer_authenticated = next_json_frame(&mut peer_socket).await;
+        assert_eq!(peer_authenticated["type"], "authenticated");
+        assert_eq!(
+            peer_authenticated["peers"][0]["principal_id"],
+            active_principal_id.to_string()
+        );
+        let peer_connection_id = peer_authenticated["connection_id"].clone();
+
+        let joined = next_json_frame(&mut active_socket).await;
+        assert_eq!(joined["type"], "peer_joined");
+        assert_eq!(
+            joined["peer"]["principal_id"],
+            peer_principal_id.to_string()
+        );
+        assert_eq!(joined["peer"]["connection_id"], peer_connection_id);
+
+        peer_socket
+            .send(ClientMessage::Text(
+                json!({
+                    "type": "offer",
+                    "target": active_principal_id,
+                    "payload": {"sdp": "v=0"}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let offer = next_json_frame(&mut active_socket).await;
+        assert_eq!(offer["type"], "signal");
+        assert_eq!(offer["kind"], "offer");
+        assert_eq!(offer["sender"], peer_principal_id.to_string());
+        assert_eq!(offer["payload"]["sdp"], "v=0");
+
+        peer_socket.close(None).await.unwrap();
+        let left = next_json_frame(&mut active_socket).await;
+        assert_eq!(left["type"], "peer_left");
+        assert_eq!(left["peer"]["principal_id"], peer_principal_id.to_string());
+        assert_eq!(left["peer"]["connection_id"], peer_connection_id);
 
         store
             .revoke_principal_context(
@@ -1236,6 +1346,7 @@ mod tests {
         project_id: Uuid,
         service_instance_id: Uuid,
         context_id: Uuid,
+        principal_id: Uuid,
         expires_at: u64,
     ) -> String {
         let issued_at = u64::try_from(chrono::Utc::now().timestamp()).unwrap();
@@ -1245,7 +1356,7 @@ mod tests {
             organization_id,
             project_id,
             service_instance_id,
-            principal_id: Uuid::new_v4(),
+            principal_id,
             permissions: BTreeSet::from(["flow.signal.connect".into()]),
             issued_at,
             expires_at,
@@ -1265,6 +1376,20 @@ mod tests {
             "signature": signature,
         })
         .to_string()
+    }
+
+    async fn next_json_frame(
+        socket: &mut WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    ) -> serde_json::Value {
+        let message = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let ClientMessage::Text(message) = message else {
+            panic!("expected JSON text frame");
+        };
+        serde_json::from_str(&message).unwrap()
     }
 
     async fn assert_protocol_error(

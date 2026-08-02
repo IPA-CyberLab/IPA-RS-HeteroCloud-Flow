@@ -5,8 +5,9 @@ use flow_domain::{
     FlowRoom, MAX_ACTIVE_ROOMS_PER_PRINCIPAL, MAX_PRINCIPAL_CONTEXT_TTL, MatchAssignment,
     MatchCandidate, MatchmakingTicket, NewAuditEvent, NewRoom, NewSignalingConnection, NewTicket,
     NewUsageEvent, PRINCIPAL_CONTEXT_CLOCK_SKEW, ReconcileOutcome, RoomState,
-    ServiceInstanceDelete, ServiceInstanceReconcile, ServiceInstanceStatus, ServiceRateLimit,
-    SessionMode, TicketState, ValidationError, rate_limit_from_spec, room_limit_from_spec,
+    SIGNALING_CONNECTION_STALE_AFTER, ServiceInstanceDelete, ServiceInstanceReconcile,
+    ServiceInstanceStatus, ServiceRateLimit, SessionMode, SignalingPeer, TicketState,
+    ValidationError, rate_limit_from_spec, room_limit_from_spec,
 };
 use serde_json::Value;
 use sqlx::{
@@ -764,7 +765,7 @@ impl PgStore {
     pub async fn open_signaling_connection(
         &self,
         connection: NewSignalingConnection,
-    ) -> Result<(), StoreError> {
+    ) -> Result<Vec<SignalingPeer>, StoreError> {
         let mut transaction = self.pool.begin().await?;
         let room_id = sqlx::query_scalar::<_, Uuid>(
             r"
@@ -808,6 +809,24 @@ impl PgStore {
         if inserted.rows_affected() != 1 {
             return Err(StoreError::Conflict("signaling connection already exists"));
         }
+        let stale_seconds = i64::try_from(SIGNALING_CONNECTION_STALE_AFTER.as_secs())
+            .map_err(|_| StoreError::Configuration("signaling stale TTL is too large"))?;
+        let peers = sqlx::query_as::<_, (Uuid, Uuid)>(
+            r"
+            SELECT connection_id, principal_id
+            FROM flow_signaling_connections
+            WHERE room_id = $1
+              AND connection_id <> $2
+              AND closed_at IS NULL
+              AND last_seen_at > now() - make_interval(secs => $3)
+            ORDER BY principal_id, connection_id
+            ",
+        )
+        .bind(room_id)
+        .bind(connection.connection_id)
+        .bind(stale_seconds)
+        .fetch_all(&mut *transaction)
+        .await?;
         sqlx::query(
             "UPDATE flow_rooms SET empty_since = NULL, join_grace_until = NULL WHERE id = $1",
         )
@@ -815,7 +834,13 @@ impl PgStore {
         .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
-        Ok(())
+        Ok(peers
+            .into_iter()
+            .map(|(connection_id, principal_id)| SignalingPeer {
+                connection_id,
+                principal_id,
+            })
+            .collect())
     }
 
     pub async fn heartbeat_signaling_connection(

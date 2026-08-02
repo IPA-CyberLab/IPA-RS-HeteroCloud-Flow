@@ -17,8 +17,10 @@ use flow_auth::{
 use flow_domain::{
     FlowRoom, MAX_ACTIVE_ROOMS_PER_PRINCIPAL, MatchAssignment, MatchmakingTicket, NewAuditEvent,
     NewRoom, NewTicket, NewUsageEvent, PRINCIPAL_CONTEXT_CLOCK_SKEW, PrincipalContext,
-    ROOM_IDLE_TIMEOUT, RoomState, SIGNALING_CONNECTION_STALE_AFTER, ServiceInstanceDelete,
-    ServiceInstanceReconcile, ServiceInstanceStatus, SessionMode,
+    ROOM_IDLE_TIMEOUT, RoomState, SIGNALING_CONNECTION_STALE_AFTER, SIGNALING_PROTOCOL_ID,
+    ServiceInstanceDelete, ServiceInstanceReconcile, ServiceInstanceStatus, SessionMode,
+    SignalingAuthenticationFrame, SignalingClientSignal, SignalingPeer, SignalingServerFrame,
+    SignalingSignalKind,
 };
 use flow_livekit::LiveKitClient;
 use flow_rate_limit::{IpRateLimiter, RateLimitDecision, RateLimitPolicy, TrustedProxies};
@@ -34,6 +36,7 @@ use uuid::Uuid;
 
 use crate::coturn_metrics::{CoturnMetricsClient, LiveKitMetricsClient};
 use crate::error::{ApiError, ErrorBody, ErrorEnvelope};
+use crate::signaling_asyncapi;
 
 const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 const IDEMPOTENCY_KEY_HEADER: HeaderName = HeaderName::from_static("idempotency-key");
@@ -83,6 +86,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
+        .route("/asyncapi.json", get(signaling_asyncapi_document))
         .route(
             "/internal/v1/service-instances/{service_instance_id}",
             put(reconcile_service_instance).delete(delete_service_instance),
@@ -100,6 +104,10 @@ pub fn router(state: AppState) -> Router {
 
 async fn live() -> impl IntoResponse {
     Json(json!({"status": "ok"}))
+}
+
+async fn signaling_asyncapi_document(State(state): State<AppState>) -> Json<Value> {
+    Json(signaling_asyncapi::document(&state.signaling_urls))
 }
 
 async fn ready(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
@@ -941,6 +949,8 @@ async fn join_room(
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let connection = match room.mode {
         SessionMode::P2p => RoomConnection::P2p {
+            protocol: SIGNALING_PROTOCOL_ID.into(),
+            asyncapi_urls: signaling_asyncapi::documentation_urls(&state.api_urls),
             urls: signaling_room_urls(&state.signaling_urls, room.id),
             turn,
         },
@@ -1279,6 +1289,8 @@ struct JoinRoomResponse {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum RoomConnection {
     P2p {
+        protocol: String,
+        asyncapi_urls: Vec<String>,
         urls: Vec<String>,
         turn: TurnCredentials,
     },
@@ -1294,7 +1306,7 @@ enum RoomConnection {
     info(
         title = "HeteroCloud Flow Public API",
         version = env!("CARGO_PKG_VERSION"),
-        description = "Public room, matchmaking, participant connection, and TURN credential API. Obtain the three short-lived X-Flow-* header values from HeteroCloud and send all three on every REST request. Every request is subject to a system source-IP ceiling; authenticated requests also share the Flow service's console-configured source-IP token bucket across all API replicas. Ready rooms are removed after ten minutes without P2P or SFU participants."
+        description = "Public room, matchmaking, participant connection, and TURN credential API. Obtain the three short-lived X-Flow-* header values from HeteroCloud and send all three on every REST request. P2P join responses identify flow-signaling.v1 and link the complete AsyncAPI WebSocket frame contract. Every request is subject to a system source-IP ceiling; authenticated requests also share the Flow service's console-configured source-IP token bucket across all API replicas. Ready rooms are removed after ten minutes without P2P or SFU participants."
     ),
     paths(
         service_overview,
@@ -1319,6 +1331,11 @@ enum RoomConnection {
         TicketResponse,
         JoinRoomResponse,
         RoomConnection,
+        SignalingAuthenticationFrame,
+        SignalingClientSignal,
+        SignalingPeer,
+        SignalingServerFrame,
+        SignalingSignalKind,
         MatchmakingTicket,
         MatchAssignment,
         FlowRoom,
@@ -1379,6 +1396,23 @@ fn public_openapi(api_urls: &[String]) -> utoipa::openapi::OpenApi {
             .map(utoipa::openapi::Server::new)
             .collect(),
     );
+    let asyncapi_urls = signaling_asyncapi::documentation_urls(api_urls);
+    if let Some(primary_url) = asyncapi_urls.first() {
+        let mut external_docs = utoipa::openapi::external_docs::ExternalDocs::new(primary_url);
+        external_docs.description = Some(
+            "Complete flow-signaling.v1 WebSocket authentication, presence, SDP, and ICE frame contract"
+                .into(),
+        );
+        document.external_docs = Some(external_docs);
+    }
+    document.extensions = Some(
+        [
+            ("x-flow-signaling-protocol", json!(SIGNALING_PROTOCOL_ID)),
+            ("x-flow-signaling-asyncapi", json!(asyncapi_urls)),
+        ]
+        .into_iter()
+        .collect(),
+    );
     document
 }
 
@@ -1423,7 +1457,7 @@ mod tests {
         PROVIDER_DELETE_ACTION, PROVIDER_PRINCIPAL_CONTEXT_REVOKE_ACTION,
         PROVIDER_RECONCILE_ACTION, PrincipalAuthenticator, ProviderClaims, SignedPrincipal,
     };
-    use flow_domain::PrincipalContext;
+    use flow_domain::{PrincipalContext, SIGNALING_PROTOCOL_ID};
     use flow_livekit::LiveKitClient;
     use flow_rate_limit::{IpRateLimiter, RateLimitPolicy, RedisBackend, TrustedProxies};
     use flow_store::PgStore;
@@ -1491,6 +1525,8 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
     #[test]
     fn serializes_ordered_join_failover_urls() {
         let connection = RoomConnection::P2p {
+            protocol: SIGNALING_PROTOCOL_ID.into(),
+            asyncapi_urls: vec!["https://flow-a.example.test/asyncapi.json".into()],
             urls: vec![
                 "wss://flow-a.example.test/v1/signal/room".into(),
                 "wss://flow-b.example.test/v1/signal/room".into(),
@@ -1508,6 +1544,11 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
 
         let rendered = serde_json::to_value(connection).unwrap();
         assert_eq!(rendered["type"], "p2p");
+        assert_eq!(rendered["protocol"], SIGNALING_PROTOCOL_ID);
+        assert_eq!(
+            rendered["asyncapi_urls"][0],
+            "https://flow-a.example.test/asyncapi.json"
+        );
         assert_eq!(rendered["urls"].as_array().unwrap().len(), 3);
         assert_eq!(
             rendered["urls"][2],
@@ -1575,6 +1616,25 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
         assert!(!paths.keys().any(|path| path.starts_with("/internal")));
         assert_eq!(value["servers"][0]["url"], "https://flow.example.test");
         assert_eq!(
+            value["externalDocs"]["url"],
+            "https://flow.example.test/asyncapi.json"
+        );
+        assert_eq!(value["x-flow-signaling-protocol"], SIGNALING_PROTOCOL_ID);
+        assert_eq!(
+            value["x-flow-signaling-asyncapi"][0],
+            "https://flow.example.test/asyncapi.json"
+        );
+        assert!(
+            value["components"]["schemas"]
+                .get("SignalingAuthenticationFrame")
+                .is_some()
+        );
+        assert!(
+            value["components"]["schemas"]
+                .get("SignalingServerFrame")
+                .is_some()
+        );
+        assert_eq!(
             value["paths"]["/v1/rooms"]["post"]["security"][0]
                 .as_object()
                 .unwrap()
@@ -1590,6 +1650,25 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
                 .get("Retry-After")
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn asyncapi_route_is_public_and_uses_configured_signaling_servers() {
+        let Some(state) = test_state().await else {
+            return;
+        };
+        let response = router(state)
+            .oneshot(Request::get("/asyncapi.json").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let document = response_json(response).await;
+        assert_eq!(document["asyncapi"], "3.1.0");
+        assert_eq!(
+            document["servers"]["primary"]["host"],
+            "flow-a.example.test"
+        );
+        assert_eq!(document["x-flow-signaling-protocol"], SIGNALING_PROTOCOL_ID);
     }
 
     #[test]
