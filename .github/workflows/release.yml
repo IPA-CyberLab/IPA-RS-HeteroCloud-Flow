@@ -61,6 +61,8 @@ jobs:
         run: helm dependency build deploy/helm/heterocloud-flow
       - name: Lint chart
         run: helm lint deploy/helm/heterocloud-flow -f deploy/helm/heterocloud-flow/ci/test-values.yaml
+      - name: Test coturn external IP mappings
+        run: bash deploy/helm/heterocloud-flow/scripts/test-coturn-template.sh
       - name: Render chart
         run: >-
           helm template flow deploy/helm/heterocloud-flow

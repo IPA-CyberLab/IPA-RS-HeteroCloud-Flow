@@ -1,3 +1,36 @@
+{{- $relayAddressMode := .Values.coturn.relayAddress.mode -}}
+{{- $relayAddressMappings := .Values.coturn.relayAddress.mappings -}}
+{{- $relayAddressMappingArgs := list -}}
+{{- $mappingNodeNames := dict -}}
+{{- $mappingPublicIps := dict -}}
+{{- $mappingPrivateIps := dict -}}
+{{- if not (or (eq $relayAddressMode "host") (eq $relayAddressMode "direct-public") (eq $relayAddressMode "one-to-one-nat")) -}}
+{{- fail (printf "unsupported coturn.relayAddress.mode %q" $relayAddressMode) -}}
+{{- end -}}
+{{- range $mapping := $relayAddressMappings -}}
+{{- if hasKey $mappingNodeNames $mapping.nodeName -}}
+{{- fail (printf "coturn.relayAddress.mappings contains duplicate nodeName %q" $mapping.nodeName) -}}
+{{- end -}}
+{{- if hasKey $mappingPublicIps $mapping.publicIp -}}
+{{- fail (printf "coturn.relayAddress.mappings contains duplicate publicIp %q" $mapping.publicIp) -}}
+{{- end -}}
+{{- if hasKey $mappingPrivateIps $mapping.privateIp -}}
+{{- fail (printf "coturn.relayAddress.mappings contains duplicate privateIp %q" $mapping.privateIp) -}}
+{{- end -}}
+{{- $_ := set $mappingNodeNames $mapping.nodeName true -}}
+{{- $_ := set $mappingPublicIps $mapping.publicIp true -}}
+{{- $_ := set $mappingPrivateIps $mapping.privateIp true -}}
+{{- $relayAddressMappingArgs = append $relayAddressMappingArgs (printf "%s=%s/%s" $mapping.nodeName $mapping.publicIp $mapping.privateIp) -}}
+{{- end -}}
+{{- if and (eq $relayAddressMode "host") (gt (len $relayAddressMappings) 0) -}}
+{{- fail "coturn.relayAddress.mappings must be empty when mode is host" -}}
+{{- end -}}
+{{- if gt (int .Values.coturn.replicaCount) 16 -}}
+{{- fail "coturn.replicaCount must not exceed 16" -}}
+{{- end -}}
+{{- if and (ne $relayAddressMode "host") (lt (len $relayAddressMappings) (int .Values.coturn.replicaCount)) -}}
+{{- fail "coturn.relayAddress.mappings must contain at least coturn.replicaCount entries in direct-public or one-to-one-nat mode" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -34,6 +67,18 @@ spec:
       topologySpreadConstraints:
         {{- include "flow.topologySpread" (dict "root" . "component" "coturn") | nindent 8 }}
       affinity:
+        {{- if $relayAddressMappings }}
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              {{- range $mapping := $relayAddressMappings }}
+              - matchFields:
+                  - key: metadata.name
+                    operator: In
+                    values:
+                      - {{ $mapping.nodeName | quote }}
+              {{- end }}
+        {{- end }}
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             - topologyKey: kubernetes.io/hostname
@@ -48,35 +93,101 @@ spec:
           imagePullPolicy: {{ .Values.coturn.image.pullPolicy }}
           command: ["/bin/sh", "-ec"]
           args:
-            - >-
-              exec turnserver
-              -n
-              --log-file=stdout
-              --pidfile=
-              --fingerprint
-              --use-auth-secret
-              --static-auth-secret="${TURN_SHARED_SECRET}"
-              --userdb=/tmp/turndb
-              --realm={{ .Values.coturn.realm }}
-              --listening-port={{ .Values.coturn.servicePort }}
-              --min-port={{ .Values.coturn.relayPortMin }}
-              --max-port={{ .Values.coturn.relayPortMax }}
-              --stale-nonce=600
-              --no-tls
-              --no-dtls
-              --no-auth-pings
-              --no-dynamic-ip-list
-              --no-dynamic-realms
-              --no-multicast-peers
-              --prometheus
-              --prometheus-port={{ .Values.coturn.metrics.port }}
-              --prometheus-username-labels
+            - |
+              set -- turnserver \
+                -n \
+                --log-file=stdout \
+                --pidfile= \
+                --fingerprint \
+                --use-auth-secret \
+                "--static-auth-secret=${TURN_SHARED_SECRET}" \
+                --userdb=/tmp/turndb \
+                --realm={{ .Values.coturn.realm | quote }} \
+                --listening-port={{ .Values.coturn.servicePort }} \
+                --min-port={{ .Values.coturn.relayPortMin }} \
+                --max-port={{ .Values.coturn.relayPortMax }} \
+                --stale-nonce=600 \
+                --no-tls \
+                --no-dtls \
+                --no-auth-pings \
+                --no-dynamic-ip-list \
+                --no-dynamic-realms \
+                --no-multicast-peers \
+                --prometheus \
+                --prometheus-port={{ .Values.coturn.metrics.port }} \
+                --prometheus-username-labels
+
+              if [ "${TURN_RELAY_ADDRESS_MODE}" != host ]; then
+                selected_node_name=
+                selected_public_ip=
+                selected_private_ip=
+                old_ifs=${IFS}
+                IFS=,
+                set -f
+                for mapping in ${TURN_RELAY_ADDRESS_MAPPINGS}; do
+                  node_name=${mapping%%=*}
+                  addresses=${mapping#*=}
+                  public_ip=${addresses%%/*}
+                  private_ip=${addresses#*/}
+                  if [ "${NODE_NAME}" = "${node_name}" ] && [ "${HOST_IP}" = "${private_ip}" ]; then
+                    selected_node_name=${node_name}
+                    selected_public_ip=${public_ip}
+                    selected_private_ip=${private_ip}
+                  fi
+                done
+                set +f
+                IFS=${old_ifs}
+
+                if [ -z "${selected_public_ip}" ]; then
+                  echo "coturn: node ${NODE_NAME} with host IP ${HOST_IP} has no matching coturn.relayAddress.mappings entry" >&2
+                  exit 1
+                fi
+
+                case "${TURN_RELAY_ADDRESS_MODE}" in
+                  direct-public)
+                    relay_ip=${selected_public_ip}
+                    set -- "$@" "--relay-ip=${selected_public_ip}"
+                    ;;
+                  one-to-one-nat)
+                    relay_ip=${selected_private_ip}
+                    set -- "$@" \
+                      "--relay-ip=${selected_private_ip}" \
+                      "--external-ip=${selected_public_ip}/${selected_private_ip}"
+                    ;;
+                  *)
+                    echo "coturn: unsupported relay address mode ${TURN_RELAY_ADDRESS_MODE}" >&2
+                    exit 1
+                    ;;
+                esac
+
+                case " $(hostname -I) " in
+                  *" ${relay_ip} "*) ;;
+                  *)
+                    echo "coturn: relay IP ${relay_ip} for node ${selected_node_name} is not assigned to a local interface" >&2
+                    exit 1
+                    ;;
+                esac
+              fi
+
+              exec "$@"
           env:
             - name: TURN_SHARED_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ include "flow.secretName" . }}
                   key: turn-shared-secret
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: TURN_RELAY_ADDRESS_MODE
+              value: {{ $relayAddressMode | quote }}
+            - name: TURN_RELAY_ADDRESS_MAPPINGS
+              value: {{ join "," $relayAddressMappingArgs | quote }}
           ports:
             - name: turn-tcp
               containerPort: {{ .Values.coturn.servicePort }}

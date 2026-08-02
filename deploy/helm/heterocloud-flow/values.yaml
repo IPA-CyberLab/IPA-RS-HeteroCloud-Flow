@@ -113,7 +113,7 @@ livekit:
   replicaCount: 3
   image:
     repository: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-livekit
-    tag: "0.1.8"
+    tag: "0.1.9"
     pullPolicy: IfNotPresent
   internalUrl: http://heterocloud-flow-livekit:7880
   publicUrls:
@@ -155,6 +155,12 @@ coturn:
     - turn-a.example.com
     - turn-b.example.com
     - turn-c.example.com
+  relayAddress:
+    # host: let coturn select a local relay address without mappings.
+    # direct-public: bind the mapped publicIp that is local to the host.
+    # one-to-one-nat: bind privateIp and advertise publicIp/privateIp.
+    mode: host
+    mappings: []
   servicePort: 3478
   relayPortMin: 49160
   relayPortMax: 49260

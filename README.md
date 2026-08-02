@@ -179,6 +179,12 @@ budget, required host spreading, probes, restricted security contexts, and
 NetworkPolicies. It also deploys three LiveKit replicas and three coturn
 replicas on HeteroNetwork public-ingress nodes.
 
+`coturn.relayAddress.mode` explicitly separates local public-address binding
+from 1:1 NAT mapping. The HeteroNetwork overlay uses `direct-public`: the VPN
+`InternalIP` selects a mapping and coturn binds the corresponding public IPv4
+address directly. The chart restricts scheduling to the mapped node set and
+fails pod startup when the current host IP is not mapped.
+
 [`deploy/environments/heteronet/values.yaml`](deploy/environments/heteronet/values.yaml)
 enables host networking so each Rust process reaches the node-local PostgreSQL
 HAProxy at `127.0.0.1:25432`. Its pools are API `8 x 3`, matchmaker `4 x 3`,

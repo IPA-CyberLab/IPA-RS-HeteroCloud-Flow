@@ -98,7 +98,7 @@
       "type": "object",
       "required": ["replicaCount", "publicUrls", "publicService"],
       "properties": {
-        "replicaCount": {"type": "integer", "minimum": 3},
+        "replicaCount": {"type": "integer", "minimum": 3, "maximum": 16},
         "publicUrls": {
           "type": "array",
           "minItems": 1,
@@ -207,7 +207,7 @@
     },
     "coturn": {
       "type": "object",
-      "required": ["replicaCount", "publicHosts", "metrics"],
+      "required": ["replicaCount", "publicHosts", "relayAddress", "metrics"],
       "properties": {
         "replicaCount": {"type": "integer", "minimum": 3},
         "publicHosts": {
@@ -219,6 +219,37 @@
             "type": "string",
             "minLength": 1,
             "pattern": "^[A-Za-z0-9.-]+$"
+          }
+        },
+        "relayAddress": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "mappings"],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["host", "direct-public", "one-to-one-nat"]
+            },
+            "mappings": {
+              "type": "array",
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["nodeName", "publicIp", "privateIp"],
+                "properties": {
+                  "nodeName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 253,
+                    "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
+                  },
+                  "publicIp": {"type": "string", "format": "ipv4"},
+                  "privateIp": {"type": "string", "format": "ipv4"}
+                }
+              }
+            }
           }
         },
         "relayPortMin": {

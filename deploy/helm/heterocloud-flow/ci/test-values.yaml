@@ -44,6 +44,18 @@ coturn:
     - turn-a.example.test
     - turn-b.example.test
     - turn-c.example.test
+  relayAddress:
+    mode: direct-public
+    mappings:
+      - nodeName: turn-node-a.example.test
+        publicIp: 192.0.2.10
+        privateIp: 10.0.0.10
+      - nodeName: turn-node-b.example.test
+        publicIp: 192.0.2.11
+        privateIp: 10.0.0.11
+      - nodeName: turn-node-c.example.test
+        publicIp: 192.0.2.12
+        privateIp: 10.0.0.12
 
 redis:
   master:

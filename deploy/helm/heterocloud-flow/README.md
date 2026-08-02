@@ -76,6 +76,9 @@ overlay sets:
 - the top-level control-plane node selector for Flow API, matchmaker,
   signaling, LiveKit, and coturn; the Redis subchart remains independently
   distributed
+- explicit coturn `direct-public` relay addressing; each VPN `status.hostIP`
+  selects a public IPv4 address that is locally assigned on the same host, and
+  coturn binds its relay socket directly to that public address
 - node-local PostgreSQL URL at `127.0.0.1:25432`
 - pools of API `8 x 3`, matchmaker `4 x 3`, signaling `6 x 3`: 54 steady-state
   maximum connections
@@ -134,9 +137,55 @@ before any API proxy. Raw backend ports must remain private. Certificate
 issuance, firewall rules, and stable multi-A DNS records are deployment
 responsibilities outside this chart.
 
-coturn remains credentialed `turn:` over UDP/TCP. Open the configured TURN
-listener and relay range, and the LiveKit RTC ports, on every eligible public
-node.
+coturn remains credentialed `turn:` over UDP/TCP. Relay address behavior is
+never auto-detected; select one of these explicit modes:
+
+- `host`: coturn selects a host address itself; `mappings` must be empty
+- `direct-public`: `privateIp` identifies the scheduled node through the
+  Downward API `status.hostIP`, while coturn binds `--relay-ip=publicIp`;
+  `publicIp` must be assigned directly to a local host interface
+- `one-to-one-nat`: coturn binds `--relay-ip=privateIp` and advertises
+  `--external-ip=publicIp/privateIp`; use only where same-port 1:1 NAT exists
+
+The HeteroNet environment uses `direct-public` because its public addresses are
+local VLAN interface addresses, while `10.250.0.x` addresses are `/32` overlay
+selection keys:
+
+```yaml
+coturn:
+  relayAddress:
+    mode: direct-public
+    mappings:
+      - nodeName: turn-node-a
+        publicIp: 192.0.2.10
+        privateIp: 10.250.0.10
+      - nodeName: turn-node-b
+        publicIp: 192.0.2.11
+        privateIp: 10.250.0.11
+      - nodeName: turn-node-c
+        publicIp: 192.0.2.12
+        privateIp: 10.250.0.12
+```
+
+Required node affinity limits the Deployment to the named Kubernetes Nodes, while hostname
+anti-affinity keeps one replica per node. A pod may therefore be rescheduled
+onto any mapped node without changing its template. At startup it selects the
+single mapping whose `nodeName` equals `spec.nodeName` and whose `privateIp`
+equals `status.hostIP`. It also verifies that the selected relay address is
+assigned to a local host interface, and exits instead of starting coturn if
+either check fails. In `direct-public` mode there is no
+`--external-ip` argument: binding the local public address makes
+`XOR-RELAYED-ADDRESS` public without relying on NAT.
+
+The mapping list must contain at least `coturn.replicaCount` unique node names,
+public addresses, and private addresses. Before replacing a node or changing
+its VPN address, update this list in the same Helm rollout. The Kubernetes Node
+name must match `nodeName`, and `status.addresses[InternalIP]` must match
+`privateIp`. Open the TURN listener and the complete relay port range on every
+mapped public node. The NAT path must preserve relay ports one-to-one; for
+example, public UDP port `49162` must reach private UDP port `49162` on the
+mapped node. This NAT requirement applies only to `one-to-one-nat`; in
+`direct-public`, open the relay range on the directly assigned public address.
 
 ## External Redis
 
