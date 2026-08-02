@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use flow_domain::{FlowRoom, PrincipalContext, SessionMode};
 use livekit_api::{
@@ -50,7 +54,7 @@ impl LiveKitClient {
             .create_room(
                 provider_name,
                 CreateRoomOptions {
-                    empty_timeout: 300,
+                    empty_timeout: 600,
                     departure_timeout: 30,
                     max_participants: u32::try_from(room.max_participants)
                         .map_err(|_| LiveKitError::InvalidParticipantLimit)?,
@@ -65,7 +69,29 @@ impl LiveKitClient {
     }
 
     pub async fn participant_count(&self, room_names: &[String]) -> Result<u64, LiveKitError> {
-        let mut count = 0_u64;
+        self.participant_counts(room_names)
+            .await?
+            .into_values()
+            .try_fold(0_u64, |total, count| {
+                total
+                    .checked_add(count)
+                    .ok_or(LiveKitError::ParticipantCountOverflow)
+            })
+    }
+
+    pub async fn participant_counts(
+        &self,
+        room_names: &[String],
+    ) -> Result<BTreeMap<String, u64>, LiveKitError> {
+        let requested: BTreeSet<_> = room_names.iter().cloned().collect();
+        if requested.len() != room_names.len() {
+            return Err(LiveKitError::DuplicateRequestedProviderRoom);
+        }
+        let mut counts: BTreeMap<_, _> = requested
+            .iter()
+            .cloned()
+            .map(|name| (name, 0_u64))
+            .collect();
         let mut seen_rooms = BTreeSet::new();
         for names in room_names.chunks(ROOM_API_BATCH_SIZE) {
             let rooms = self
@@ -78,15 +104,13 @@ impl LiveKitClient {
                 if !names.iter().any(|name| name == &room.name) {
                     return Err(LiveKitError::UnexpectedProviderRoom(room.name));
                 }
-                if !seen_rooms.insert(room.name) {
+                if !seen_rooms.insert(room.name.clone()) {
                     return Err(LiveKitError::DuplicateProviderRoom);
                 }
-                count = count
-                    .checked_add(u64::from(room.num_participants))
-                    .ok_or(LiveKitError::ParticipantCountOverflow)?;
+                counts.insert(room.name, u64::from(room.num_participants));
             }
         }
-        Ok(count)
+        Ok(counts)
     }
 
     pub async fn delete_rooms(&self, room_names: &[String]) -> Result<(), LiveKitError> {
@@ -183,6 +207,8 @@ pub enum LiveKitError {
     UnexpectedProviderRoom(String),
     #[error("LiveKit returned a duplicate provider room")]
     DuplicateProviderRoom,
+    #[error("provider room names must be unique")]
+    DuplicateRequestedProviderRoom,
     #[error("room metadata is invalid")]
     InvalidMetadata,
     #[error("LiveKit service request failed: {0}")]
@@ -217,6 +243,7 @@ mod tests {
             organization_id,
             project_id,
             service_instance_id,
+            created_by_principal_id: principal_id,
             name: "room-a".into(),
             provider_room_name: Some("flow-room-a".into()),
             mode: SessionMode::Sfu,

@@ -2,11 +2,11 @@ use std::{str::FromStr, time::Duration};
 
 use chrono::{DateTime, Utc};
 use flow_domain::{
-    FlowRoom, MAX_PRINCIPAL_CONTEXT_TTL, MatchAssignment, MatchCandidate, MatchmakingTicket,
-    NewAuditEvent, NewRoom, NewSignalingConnection, NewTicket, NewUsageEvent,
-    PRINCIPAL_CONTEXT_CLOCK_SKEW, ReconcileOutcome, RoomState, ServiceInstanceDelete,
-    ServiceInstanceReconcile, ServiceInstanceStatus, ServiceRateLimit, SessionMode, TicketState,
-    ValidationError, rate_limit_from_spec, room_limit_from_spec,
+    FlowRoom, MAX_ACTIVE_ROOMS_PER_PRINCIPAL, MAX_PRINCIPAL_CONTEXT_TTL, MatchAssignment,
+    MatchCandidate, MatchmakingTicket, NewAuditEvent, NewRoom, NewSignalingConnection, NewTicket,
+    NewUsageEvent, PRINCIPAL_CONTEXT_CLOCK_SKEW, ReconcileOutcome, RoomState,
+    ServiceInstanceDelete, ServiceInstanceReconcile, ServiceInstanceStatus, ServiceRateLimit,
+    SessionMode, TicketState, ValidationError, rate_limit_from_spec, room_limit_from_spec,
 };
 use serde_json::Value;
 use sqlx::{
@@ -46,6 +46,12 @@ pub struct DeleteOutcome {
     pub operation_id: Uuid,
     pub status: ServiceInstanceStatus,
     pub completed_now: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoomActivityCandidate {
+    pub room: FlowRoom,
+    pub claim_token: Uuid,
 }
 
 impl PgStore {
@@ -759,20 +765,34 @@ impl PgStore {
         &self,
         connection: NewSignalingConnection,
     ) -> Result<(), StoreError> {
+        let mut transaction = self.pool.begin().await?;
+        let room_id = sqlx::query_scalar::<_, Uuid>(
+            r"
+            SELECT id
+            FROM flow_rooms
+            WHERE id = $1
+              AND organization_id = $2
+              AND project_id = $3
+              AND service_instance_id = $4
+              AND mode = 'p2p'
+              AND state = 'ready'
+            FOR UPDATE
+            ",
+        )
+        .bind(connection.room_id)
+        .bind(connection.organization_id)
+        .bind(connection.project_id)
+        .bind(connection.service_instance_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(StoreError::Conflict("room is unavailable"))?;
         let inserted = sqlx::query(
             r"
             INSERT INTO flow_signaling_connections (
                 connection_id, organization_id, project_id, service_instance_id,
                 room_id, principal_id
             )
-            SELECT $1, $2, $3, $4, id, $6
-            FROM flow_rooms
-            WHERE id = $5
-              AND organization_id = $2
-              AND project_id = $3
-              AND service_instance_id = $4
-              AND mode = 'p2p'
-              AND state = 'ready'
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (connection_id) DO NOTHING
             ",
         )
@@ -782,22 +802,45 @@ impl PgStore {
         .bind(connection.service_instance_id)
         .bind(connection.room_id)
         .bind(connection.principal_id)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .map_err(map_database_error)?;
-        if inserted.rows_affected() == 1 {
-            Ok(())
-        } else {
-            Err(StoreError::Conflict(
-                "signaling connection already exists or room is unavailable",
-            ))
+        if inserted.rows_affected() != 1 {
+            return Err(StoreError::Conflict("signaling connection already exists"));
         }
+        sqlx::query(
+            "UPDATE flow_rooms SET empty_since = NULL, join_grace_until = NULL WHERE id = $1",
+        )
+        .bind(room_id)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(())
     }
 
     pub async fn heartbeat_signaling_connection(
         &self,
         connection_id: Uuid,
     ) -> Result<bool, StoreError> {
+        let mut transaction = self.pool.begin().await?;
+        let room_id = sqlx::query_scalar::<_, Uuid>(
+            r"
+            SELECT room_id
+            FROM flow_signaling_connections
+            WHERE connection_id = $1 AND closed_at IS NULL
+            ",
+        )
+        .bind(connection_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(room_id) = room_id else {
+            transaction.commit().await?;
+            return Ok(false);
+        };
+        sqlx::query("SELECT id FROM flow_rooms WHERE id = $1 FOR UPDATE")
+            .bind(room_id)
+            .execute(&mut *transaction)
+            .await?;
         let updated = sqlx::query(
             r"
             UPDATE flow_signaling_connections
@@ -806,8 +849,15 @@ impl PgStore {
             ",
         )
         .bind(connection_id)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
+        if updated.rows_affected() == 1 {
+            sqlx::query("UPDATE flow_rooms SET empty_since = NULL WHERE id = $1")
+                .bind(room_id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        transaction.commit().await?;
         Ok(updated.rows_affected() == 1)
     }
 
@@ -815,6 +865,25 @@ impl PgStore {
         &self,
         connection_id: Uuid,
     ) -> Result<bool, StoreError> {
+        let mut transaction = self.pool.begin().await?;
+        let room_id = sqlx::query_scalar::<_, Uuid>(
+            r"
+            SELECT room_id
+            FROM flow_signaling_connections
+            WHERE connection_id = $1 AND closed_at IS NULL
+            ",
+        )
+        .bind(connection_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(room_id) = room_id else {
+            transaction.commit().await?;
+            return Ok(false);
+        };
+        sqlx::query("SELECT id FROM flow_rooms WHERE id = $1 FOR UPDATE")
+            .bind(room_id)
+            .execute(&mut *transaction)
+            .await?;
         let updated = sqlx::query(
             r"
             UPDATE flow_signaling_connections
@@ -823,8 +892,26 @@ impl PgStore {
             ",
         )
         .bind(connection_id)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
+        if updated.rows_affected() == 1 {
+            sqlx::query(
+                r"
+                UPDATE flow_rooms
+                SET empty_since = now()
+                WHERE id = $1
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM flow_signaling_connections
+                      WHERE room_id = $1 AND closed_at IS NULL
+                  )
+                ",
+            )
+            .bind(room_id)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
         Ok(updated.rows_affected() == 1)
     }
 
@@ -998,6 +1085,14 @@ impl PgStore {
         if active_rooms >= u64::from(room_limit) {
             return Err(StoreError::RoomLimitExceeded { limit: room_limit });
         }
+        ensure_principal_room_capacity(
+            &mut transaction,
+            room.organization_id,
+            room.project_id,
+            room.service_instance_id,
+            room.created_by_principal_id,
+        )
+        .await?;
         let row = insert_room(&mut *transaction, room).await?;
         transaction.commit().await?;
         row.try_into()
@@ -1090,6 +1185,254 @@ impl PgStore {
         rows.into_iter().map(TryInto::try_into).collect()
     }
 
+    pub async fn get_room_for_join(
+        &self,
+        organization_id: Uuid,
+        project_id: Uuid,
+        service_instance_id: Uuid,
+        room_id: Uuid,
+        credential_ttl: Duration,
+    ) -> Result<FlowRoom, StoreError> {
+        let ttl_seconds = i64::try_from(credential_ttl.as_secs())
+            .map_err(|_| StoreError::Configuration("room join TTL is too large"))?;
+        if ttl_seconds == 0 {
+            return Err(StoreError::Configuration("room join TTL must be positive"));
+        }
+        let mut transaction = self.pool.begin().await?;
+        let mut row = sqlx::query_as::<_, RoomRow>(
+            r"
+            SELECT *
+            FROM flow_rooms
+            WHERE id = $1
+              AND organization_id = $2
+              AND project_id = $3
+              AND service_instance_id = $4
+            FOR UPDATE
+            ",
+        )
+        .bind(room_id)
+        .bind(organization_id)
+        .bind(project_id)
+        .bind(service_instance_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(StoreError::NotFound)?;
+        if row.state == "ready" {
+            row = sqlx::query_as::<_, RoomRow>(
+                r"
+                UPDATE flow_rooms
+                SET join_grace_until = GREATEST(
+                    COALESCE(join_grace_until, now()),
+                    now() + ($2 * interval '1 second')
+                )
+                WHERE id = $1
+                RETURNING *
+                ",
+            )
+            .bind(room_id)
+            .bind(ttl_seconds)
+            .fetch_one(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        row.try_into()
+    }
+
+    pub async fn claim_room_activity_batch(
+        &self,
+        check_interval: Duration,
+        batch_size: u32,
+    ) -> Result<Vec<RoomActivityCandidate>, StoreError> {
+        let check_seconds = i64::try_from(check_interval.as_secs())
+            .map_err(|_| StoreError::Configuration("room activity interval is too large"))?;
+        if check_seconds == 0 || batch_size == 0 {
+            return Err(StoreError::Configuration(
+                "room activity claim settings must be positive",
+            ));
+        }
+        let claim_token = Uuid::now_v7();
+        let rows = sqlx::query_as::<_, RoomRow>(
+            r"
+            WITH candidates AS (
+                SELECT id
+                FROM flow_rooms
+                WHERE state = 'ready'
+                  AND (
+                      activity_checked_at IS NULL
+                      OR activity_checked_at <= now() - ($1 * interval '1 second')
+                  )
+                ORDER BY activity_checked_at NULLS FIRST, created_at
+                FOR UPDATE SKIP LOCKED
+                LIMIT $2
+            )
+            UPDATE flow_rooms AS room
+            SET activity_checked_at = now(), activity_check_token = $3
+            FROM candidates
+            WHERE room.id = candidates.id
+            RETURNING room.*
+            ",
+        )
+        .bind(check_seconds)
+        .bind(i64::from(batch_size.min(1000)))
+        .bind(claim_token)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(RoomActivityCandidate {
+                    room: row.try_into()?,
+                    claim_token,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn reconcile_room_activity(
+        &self,
+        room_id: Uuid,
+        claim_token: Uuid,
+        sfu_participants: Option<u64>,
+        idle_timeout: Duration,
+        signaling_stale_after: Duration,
+    ) -> Result<Option<FlowRoom>, StoreError> {
+        let idle_duration = chrono::Duration::from_std(idle_timeout)
+            .map_err(|_| StoreError::Configuration("room idle timeout is too large"))?;
+        let stale_seconds = i64::try_from(signaling_stale_after.as_secs())
+            .map_err(|_| StoreError::Configuration("signaling stale TTL is too large"))?;
+        if idle_timeout.is_zero() || stale_seconds == 0 {
+            return Err(StoreError::Configuration(
+                "room lifecycle durations must be positive",
+            ));
+        }
+        let mut transaction = self.pool.begin().await?;
+        let Some(row) = sqlx::query_as::<_, RoomRow>(
+            r"
+            SELECT *
+            FROM flow_rooms
+            WHERE id = $1 AND state = 'ready' AND activity_check_token = $2
+            FOR UPDATE
+            ",
+        )
+        .bind(room_id)
+        .bind(claim_token)
+        .fetch_optional(&mut *transaction)
+        .await?
+        else {
+            transaction.commit().await?;
+            return Ok(None);
+        };
+        let mode = SessionMode::from_str(&row.mode)?;
+        let now = Utc::now();
+        let join_is_pending = row.join_grace_until.is_some_and(|until| until > now);
+        let has_connections = match mode {
+            SessionMode::P2p => {
+                sqlx::query_scalar::<_, bool>(
+                    r"
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM flow_signaling_connections
+                        WHERE room_id = $1
+                          AND closed_at IS NULL
+                          AND last_seen_at >= now() - ($2 * interval '1 second')
+                    )
+                    ",
+                )
+                .bind(room_id)
+                .bind(stale_seconds)
+                .fetch_one(&mut *transaction)
+                .await?
+            }
+            SessionMode::Sfu => {
+                sfu_participants.ok_or(StoreError::Configuration(
+                    "SFU activity observation is missing",
+                ))? > 0
+            }
+        };
+        if has_connections {
+            sqlx::query(
+                r"
+                UPDATE flow_rooms
+                SET empty_since = NULL,
+                    join_grace_until = NULL,
+                    activity_check_token = NULL
+                WHERE id = $1
+                ",
+            )
+            .bind(room_id)
+            .execute(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+            return Ok(None);
+        }
+        if join_is_pending {
+            sqlx::query("UPDATE flow_rooms SET activity_check_token = NULL WHERE id = $1")
+                .bind(room_id)
+                .execute(&mut *transaction)
+                .await?;
+            transaction.commit().await?;
+            return Ok(None);
+        }
+
+        let empty_since = if let Some(empty_since) = row.empty_since {
+            empty_since
+        } else {
+            let detected_empty_since = match mode {
+                SessionMode::P2p => sqlx::query_scalar::<_, Option<DateTime<Utc>>>(
+                    "SELECT max(last_seen_at) FROM flow_signaling_connections WHERE room_id = $1",
+                )
+                .bind(room_id)
+                .fetch_one(&mut *transaction)
+                .await?
+                .unwrap_or(now),
+                SessionMode::Sfu => now,
+            };
+            sqlx::query(
+                r"
+                UPDATE flow_rooms
+                SET empty_since = $2, activity_check_token = NULL
+                WHERE id = $1
+                ",
+            )
+            .bind(room_id)
+            .bind(detected_empty_since)
+            .execute(&mut *transaction)
+            .await?;
+            detected_empty_since
+        };
+        if empty_since > now - idle_duration {
+            sqlx::query("UPDATE flow_rooms SET activity_check_token = NULL WHERE id = $1")
+                .bind(room_id)
+                .execute(&mut *transaction)
+                .await?;
+            transaction.commit().await?;
+            return Ok(None);
+        }
+
+        sqlx::query(
+            r"
+            UPDATE matchmaking_tickets AS ticket
+            SET state = 'expired', updated_at = now()
+            WHERE ticket.state = 'assigned'
+              AND EXISTS (
+                  SELECT 1
+                  FROM match_assignments AS assignment
+                  WHERE assignment.ticket_id = ticket.id
+                    AND assignment.room_id = $1
+              )
+            ",
+        )
+        .bind(room_id)
+        .execute(&mut *transaction)
+        .await?;
+        let deleted =
+            sqlx::query_as::<_, RoomRow>("DELETE FROM flow_rooms WHERE id = $1 RETURNING *")
+                .bind(room_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+        transaction.commit().await?;
+        Ok(Some(deleted.try_into()?))
+    }
+
     pub async fn claim_match(
         &self,
         reservation_ttl: Duration,
@@ -1100,29 +1443,47 @@ impl PgStore {
 
         let group = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, String, i32)>(
             r"
-            SELECT t.organization_id, t.project_id, t.service_instance_id,
-                   t.queue_name, t.mode, t.match_size
-            FROM matchmaking_tickets t
-            JOIN flow_service_instances s
-              ON s.id = t.service_instance_id
-             AND s.organization_id = t.organization_id
-             AND s.project_id = t.project_id
-            WHERE t.state = 'queued' AND t.expires_at > now()
-              AND (
+            WITH candidate_groups AS (
+                SELECT t.organization_id, t.project_id, t.service_instance_id,
+                       t.queue_name, t.mode, t.match_size,
+                       min(t.created_at) AS first_created_at,
+                       (array_agg(t.principal_id ORDER BY t.created_at))[1]
+                           AS owner_principal_id
+                FROM matchmaking_tickets t
+                JOIN flow_service_instances s
+                  ON s.id = t.service_instance_id
+                 AND s.organization_id = t.organization_id
+                 AND s.project_id = t.project_id
+                WHERE t.state = 'queued' AND t.expires_at > now()
+                  AND (
+                    SELECT count(*)
+                    FROM flow_rooms r
+                    WHERE r.organization_id = t.organization_id
+                      AND r.project_id = t.project_id
+                      AND r.service_instance_id = t.service_instance_id
+                      AND r.state IN ('provisioning', 'ready')
+                  ) < COALESCE((s.desired_spec ->> 'max_rooms')::bigint, 100)
+                GROUP BY t.organization_id, t.project_id, t.service_instance_id,
+                         t.queue_name, t.mode, t.match_size
+                HAVING count(*) >= t.match_size
+            )
+            SELECT organization_id, project_id, service_instance_id,
+                   queue_name, mode, match_size
+            FROM candidate_groups AS candidate
+            WHERE (
                 SELECT count(*)
-                FROM flow_rooms r
-                WHERE r.organization_id = t.organization_id
-                  AND r.project_id = t.project_id
-                  AND r.service_instance_id = t.service_instance_id
-                  AND r.state IN ('provisioning', 'ready')
-              ) < COALESCE((s.desired_spec ->> 'max_rooms')::bigint, 100)
-            GROUP BY t.organization_id, t.project_id, t.service_instance_id,
-                     t.queue_name, t.mode, t.match_size
-            HAVING count(*) >= t.match_size
-            ORDER BY min(t.created_at)
+                FROM flow_rooms AS room
+                WHERE room.organization_id = candidate.organization_id
+                  AND room.project_id = candidate.project_id
+                  AND room.service_instance_id = candidate.service_instance_id
+                  AND room.created_by_principal_id = candidate.owner_principal_id
+                  AND room.state IN ('provisioning', 'ready')
+            ) < $1
+            ORDER BY first_created_at
             LIMIT 1
             ",
         )
+        .bind(i64::from(MAX_ACTIVE_ROOMS_PER_PRINCIPAL))
         .fetch_optional(&mut *transaction)
         .await?;
 
@@ -1197,6 +1558,27 @@ impl PgStore {
             return Ok(None);
         }
 
+        let created_by_principal_id = rows
+            .first()
+            .map(|ticket| ticket.principal_id)
+            .ok_or(StoreError::CorruptData("match reservation owner"))?;
+        match ensure_principal_room_capacity(
+            &mut transaction,
+            organization_id,
+            project_id,
+            service_instance_id,
+            created_by_principal_id,
+        )
+        .await
+        {
+            Ok(()) => {}
+            Err(StoreError::PrincipalRoomLimitExceeded { .. }) => {
+                transaction.commit().await?;
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        }
+
         let room_id = Uuid::now_v7();
         let reservation_seconds = i64::try_from(reservation_ttl.as_secs())
             .map_err(|_| StoreError::Configuration("reservation TTL is too large"))?;
@@ -1224,6 +1606,7 @@ impl PgStore {
             organization_id,
             project_id,
             service_instance_id,
+            created_by_principal_id,
             name: room_name,
             provider_room_name: (mode == SessionMode::Sfu).then(|| format!("flow-{room_id}")),
             mode,
@@ -1411,10 +1794,11 @@ where
     sqlx::query_as::<_, RoomRow>(
         r"
         INSERT INTO flow_rooms (
-            id, organization_id, project_id, service_instance_id, name,
+            id, organization_id, project_id, service_instance_id,
+            created_by_principal_id, name,
             provider_room_name, mode, state, max_participants, metadata
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING *
         ",
     )
@@ -1422,6 +1806,7 @@ where
     .bind(room.organization_id)
     .bind(room.project_id)
     .bind(room.service_instance_id)
+    .bind(room.created_by_principal_id)
     .bind(room.name)
     .bind(room.provider_room_name)
     .bind(room.mode.to_string())
@@ -1431,6 +1816,38 @@ where
     .fetch_one(executor)
     .await
     .map_err(map_database_error)
+}
+
+async fn ensure_principal_room_capacity(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    project_id: Uuid,
+    service_instance_id: Uuid,
+    principal_id: Uuid,
+) -> Result<(), StoreError> {
+    let active_rooms: i64 = sqlx::query_scalar(
+        r"
+        SELECT count(*)
+        FROM flow_rooms
+        WHERE organization_id = $1
+          AND project_id = $2
+          AND service_instance_id = $3
+          AND created_by_principal_id = $4
+          AND state IN ('provisioning', 'ready')
+        ",
+    )
+    .bind(organization_id)
+    .bind(project_id)
+    .bind(service_instance_id)
+    .bind(principal_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if active_rooms >= i64::from(MAX_ACTIVE_ROOMS_PER_PRINCIPAL) {
+        return Err(StoreError::PrincipalRoomLimitExceeded {
+            limit: MAX_ACTIVE_ROOMS_PER_PRINCIPAL,
+        });
+    }
+    Ok(())
 }
 
 async fn service_room_capacity(
@@ -1650,6 +2067,7 @@ struct RoomRow {
     organization_id: Uuid,
     project_id: Uuid,
     service_instance_id: Uuid,
+    created_by_principal_id: Uuid,
     name: String,
     provider_room_name: Option<String>,
     mode: String,
@@ -1657,6 +2075,12 @@ struct RoomRow {
     max_participants: i32,
     metadata: Value,
     failure_reason: Option<String>,
+    empty_since: Option<DateTime<Utc>>,
+    join_grace_until: Option<DateTime<Utc>>,
+    #[allow(dead_code)]
+    activity_checked_at: Option<DateTime<Utc>>,
+    #[allow(dead_code)]
+    activity_check_token: Option<Uuid>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -1670,6 +2094,7 @@ impl TryFrom<RoomRow> for FlowRoom {
             organization_id: row.organization_id,
             project_id: row.project_id,
             service_instance_id: row.service_instance_id,
+            created_by_principal_id: row.created_by_principal_id,
             name: row.name,
             provider_room_name: row.provider_room_name,
             mode: SessionMode::from_str(&row.mode)?,
@@ -1849,6 +2274,8 @@ pub enum StoreError {
     Conflict(&'static str),
     #[error("room limit of {limit} has been reached")]
     RoomLimitExceeded { limit: u32 },
+    #[error("principal room limit of {limit} has been reached")]
+    PrincipalRoomLimitExceeded { limit: u32 },
     #[error("service instance generation {requested} is stale; current generation is {current}")]
     StaleGeneration { current: i64, requested: i64 },
     #[error("principal context revocation expiry cannot be more than 315 seconds in the future")]

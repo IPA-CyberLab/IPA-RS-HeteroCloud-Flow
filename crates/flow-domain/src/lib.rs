@@ -13,6 +13,10 @@ const MAX_ROOM_NAME_LEN: usize = 160;
 
 pub const DEFAULT_MAX_ROOMS: u32 = 100;
 pub const MAX_ROOMS: u32 = 1_000_000;
+pub const MAX_ACTIVE_ROOMS_PER_PRINCIPAL: u32 = 100;
+pub const ROOM_IDLE_TIMEOUT: Duration = Duration::from_mins(10);
+pub const ROOM_ACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(15);
+pub const ROOM_ACTIVITY_BATCH_SIZE: u32 = 100;
 pub const DEFAULT_RATE_LIMIT_REQUESTS_PER_SECOND: u32 = 20;
 pub const DEFAULT_RATE_LIMIT_BURST: u32 = 40;
 pub const MAX_RATE_LIMIT_REQUESTS_PER_SECOND: u32 = 1_000;
@@ -226,6 +230,7 @@ pub struct FlowRoom {
     pub organization_id: Uuid,
     pub project_id: Uuid,
     pub service_instance_id: Uuid,
+    pub created_by_principal_id: Uuid,
     pub name: String,
     pub provider_room_name: Option<String>,
     pub mode: SessionMode,
@@ -243,6 +248,7 @@ pub struct NewRoom {
     pub organization_id: Uuid,
     pub project_id: Uuid,
     pub service_instance_id: Uuid,
+    pub created_by_principal_id: Uuid,
     pub name: String,
     pub provider_room_name: Option<String>,
     pub mode: SessionMode,

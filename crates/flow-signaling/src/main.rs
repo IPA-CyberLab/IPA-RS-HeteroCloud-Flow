@@ -1089,6 +1089,7 @@ mod tests {
                 organization_id,
                 project_id,
                 service_instance_id,
+                created_by_principal_id: Uuid::new_v4(),
                 name: format!("room-{room_id}"),
                 provider_room_name: None,
                 mode: SessionMode::P2p,

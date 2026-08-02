@@ -15,9 +15,10 @@ use flow_auth::{
     ProviderAuthenticator,
 };
 use flow_domain::{
-    FlowRoom, MatchAssignment, MatchmakingTicket, NewAuditEvent, NewRoom, NewTicket, NewUsageEvent,
-    PRINCIPAL_CONTEXT_CLOCK_SKEW, PrincipalContext, RoomState, SIGNALING_CONNECTION_STALE_AFTER,
-    ServiceInstanceDelete, ServiceInstanceReconcile, ServiceInstanceStatus, SessionMode,
+    FlowRoom, MAX_ACTIVE_ROOMS_PER_PRINCIPAL, MatchAssignment, MatchmakingTicket, NewAuditEvent,
+    NewRoom, NewTicket, NewUsageEvent, PRINCIPAL_CONTEXT_CLOCK_SKEW, PrincipalContext,
+    ROOM_IDLE_TIMEOUT, RoomState, SIGNALING_CONNECTION_STALE_AFTER, ServiceInstanceDelete,
+    ServiceInstanceReconcile, ServiceInstanceStatus, SessionMode,
 };
 use flow_livekit::LiveKitClient;
 use flow_rate_limit::{IpRateLimiter, RateLimitDecision, RateLimitPolicy, TrustedProxies};
@@ -366,6 +367,8 @@ async fn service_overview(
             turn: state.turn.urls().to_vec(),
         },
         room_limit: Some(u64::from(snapshot.room_limit)),
+        principal_room_limit: u64::from(MAX_ACTIVE_ROOMS_PER_PRINCIPAL),
+        room_idle_timeout_seconds: ROOM_IDLE_TIMEOUT.as_secs(),
     }))
 }
 
@@ -723,7 +726,7 @@ async fn cancel_ticket(
         (status = 400, description = "Room request is invalid", body = ErrorEnvelope),
         (status = 401, description = "Signed access context is missing or invalid", body = ErrorEnvelope),
         (status = 403, description = "The context lacks flow.room.create", body = ErrorEnvelope),
-        (status = 409, description = "Configured concurrent room limit was reached", body = ErrorEnvelope),
+        (status = 409, description = "Service or principal concurrent room limit was reached", body = ErrorEnvelope),
         (status = 429, description = "Source IP request limit exceeded", body = ErrorEnvelope,
             headers(("Retry-After" = u64), ("X-RateLimit-Limit" = u32), ("X-RateLimit-Remaining" = u32), ("X-RateLimit-Reset" = u64))
         ),
@@ -746,6 +749,7 @@ async fn create_room(
         organization_id: context.principal.organization_id,
         project_id: context.principal.project_id,
         service_instance_id: context.principal.service_instance_id,
+        created_by_principal_id: context.principal.principal_id,
         name: room_name.clone(),
         provider_room_name: provider_room_name.clone(),
         mode: request.mode,
@@ -762,6 +766,7 @@ async fn create_room(
         organization_id: context.principal.organization_id,
         project_id: context.principal.project_id,
         service_instance_id: context.principal.service_instance_id,
+        created_by_principal_id: context.principal.principal_id,
         name: room_name.clone(),
         provider_room_name: provider_room_name.clone(),
         mode: request.mode,
@@ -901,13 +906,20 @@ async fn join_room(
     Json(request): Json<JoinRoomRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     context.require("flow.room.join")?;
+    let remaining = (context.principal.expires_at - Utc::now())
+        .to_std()
+        .map_err(|_| ApiError::from(flow_auth::AuthError::InvalidToken))?;
+    if remaining < Duration::from_secs(10) {
+        return Err(flow_auth::AuthError::InvalidToken.into());
+    }
     let room = state
         .store
-        .get_room(
+        .get_room_for_join(
             context.principal.organization_id,
             context.principal.project_id,
             context.principal.service_instance_id,
             room_id,
+            remaining,
         )
         .await?;
     if room.state != RoomState::Ready {
@@ -921,12 +933,6 @@ async fn join_room(
         context.principal.service_instance_id,
         context.principal.principal_id
     );
-    let remaining = (context.principal.expires_at - Utc::now())
-        .to_std()
-        .map_err(|_| ApiError::from(flow_auth::AuthError::InvalidToken))?;
-    if remaining < Duration::from_secs(10) {
-        return Err(flow_auth::AuthError::InvalidToken.into());
-    }
     // LiveKit and coturn cannot retract issued credentials through this API.
     // Bound both credentials to the delegated context's remaining lifetime.
     let turn = state
@@ -1187,6 +1193,8 @@ struct ServiceOverviewResponse {
     turn_allocations: Option<u64>,
     endpoints: ServiceEndpoints,
     room_limit: Option<u64>,
+    principal_room_limit: u64,
+    room_idle_timeout_seconds: u64,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1286,7 +1294,7 @@ enum RoomConnection {
     info(
         title = "HeteroCloud Flow Public API",
         version = env!("CARGO_PKG_VERSION"),
-        description = "Public room, matchmaking, participant connection, and TURN credential API. Obtain the three short-lived X-Flow-* header values from HeteroCloud and send all three on every REST request. Every request is subject to a system source-IP ceiling; authenticated requests also share the Flow service's console-configured source-IP token bucket across all API replicas."
+        description = "Public room, matchmaking, participant connection, and TURN credential API. Obtain the three short-lived X-Flow-* header values from HeteroCloud and send all three on every REST request. Every request is subject to a system source-IP ceiling; authenticated requests also share the Flow service's console-configured source-IP token bucket across all API replicas. Ready rooms are removed after ten minutes without P2P or SFU participants."
     ),
     paths(
         service_overview,
@@ -1528,11 +1536,15 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
                 turn: vec!["turn:turn.example.test:3478?transport=udp".into()],
             },
             room_limit: Some(100),
+            principal_room_limit: 100,
+            room_idle_timeout_seconds: 600,
         })
         .unwrap();
         assert_eq!(rendered["active_rooms"], 3);
         assert_eq!(rendered["transferred_bytes"], 200);
         assert_eq!(rendered["room_limit"], 100);
+        assert_eq!(rendered["principal_room_limit"], 100);
+        assert_eq!(rendered["room_idle_timeout_seconds"], 600);
         assert!(rendered["turn_allocations"].is_null());
         assert_eq!(
             rendered["endpoints"]["stun"][0],

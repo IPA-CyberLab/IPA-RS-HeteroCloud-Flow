@@ -113,6 +113,11 @@ impl From<StoreError> for ApiError {
                 code: "room_limit_exceeded",
                 message: format!("room limit of {limit} has been reached"),
             },
+            StoreError::PrincipalRoomLimitExceeded { limit } => Self {
+                status: StatusCode::CONFLICT,
+                code: "principal_room_limit_exceeded",
+                message: format!("principal room limit of {limit} has been reached"),
+            },
             StoreError::StaleGeneration { current, requested } => Self::conflict(format!(
                 "generation {requested} is stale; current generation is {current}"
             )),

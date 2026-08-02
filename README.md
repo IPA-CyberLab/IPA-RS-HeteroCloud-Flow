@@ -154,6 +154,21 @@ as primary and the remaining URLs in order after connection failure. TURN
 credentials contain every configured UDP/TCP endpoint. LiveKit keys and TURN
 secrets are shared by replicas, but neither secret is ever returned.
 
+Room capacity has two independent bounds. The service spec's `max_rooms`
+controls total concurrent rooms for the service, while the system always caps
+rooms created by one `principal_id` at 100. Both counts include `provisioning`
+and `ready` rooms and are checked atomically in PostgreSQL across all API and
+matchmaker replicas. `GET /v1/service-overview` publishes these values as
+`room_limit` and `principal_room_limit`.
+
+Ready rooms are removed after ten minutes without an actual participant. P2P
+activity comes from persisted signaling heartbeats and SFU activity comes from
+LiveKit's participant directory, sampled every 15 seconds by the HA
+matchmakers. Issuing join credentials does not reset the empty-room timer, but
+deletion waits for those short-lived credentials to expire so a valid token
+cannot recreate an already-deleted room. The overview publishes the fixed
+timeout as `room_idle_timeout_seconds`.
+
 The first P2P WebSocket frame must carry the separate signed principal context:
 
 ```json

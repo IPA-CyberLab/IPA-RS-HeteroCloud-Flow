@@ -217,6 +217,9 @@ If Redis authentication is enabled, provide a complete LiveKit config through
 - PostgreSQL advisory and row locks let all matchmakers work concurrently
   without splitting a match.
 - A dead matchmaker's reservation expires and its tickets return to the queue.
+- Matchmakers share PostgreSQL activity claims and remove P2P or SFU rooms
+  after ten minutes with no participants; another replica resumes scans after
+  a worker failure.
 - Redis failover closes affected signaling sockets; reconnecting clients
   resolve the new primary. Loss of every ephemeral Redis pod loses transient
   coordination, not durable Flow state.

@@ -2,11 +2,11 @@ use std::{env, time::Duration};
 
 use chrono::Utc;
 use flow_domain::{
-    NewAuditEvent, NewRoom, NewSignalingConnection, NewTicket, NewUsageEvent,
-    PRINCIPAL_CONTEXT_CLOCK_SKEW, RoomState, ServiceInstanceDelete, ServiceInstancePhase,
-    ServiceInstanceReconcile, SessionMode,
+    MAX_ACTIVE_ROOMS_PER_PRINCIPAL, NewAuditEvent, NewRoom, NewSignalingConnection, NewTicket,
+    NewUsageEvent, PRINCIPAL_CONTEXT_CLOCK_SKEW, RoomState, ServiceInstanceDelete,
+    ServiceInstancePhase, ServiceInstanceReconcile, SessionMode,
 };
-use flow_store::{PgStore, StoreError};
+use flow_store::{PgStore, RoomActivityCandidate, StoreError};
 use serde_json::json;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -186,6 +186,7 @@ async fn room_limit_is_atomic_across_room_creation_and_matchmaking() {
             organization_id: scope.organization_id,
             project_id: scope.project_id,
             service_instance_id: scope.service_instance_id,
+            created_by_principal_id: Uuid::new_v4(),
             name: format!("room-{id}"),
             provider_room_name: None,
             mode: SessionMode::P2p,
@@ -235,6 +236,388 @@ async fn room_limit_is_atomic_across_room_creation_and_matchmaking() {
 }
 
 #[tokio::test]
+async fn principal_room_limit_is_atomic_and_independent_from_service_limit() {
+    let _guard = DATABASE_TEST_LOCK.lock().await;
+    let Some(store) = test_store(8).await else {
+        return;
+    };
+    let scope = Scope {
+        organization_id: Uuid::new_v4(),
+        project_id: Uuid::new_v4(),
+        service_instance_id: Uuid::new_v4(),
+    };
+    store
+        .reconcile_service_instance(reconcile_command(
+            scope,
+            1,
+            Uuid::new_v4(),
+            "principal-limited-flow",
+            json!({"max_rooms": 1000}),
+        ))
+        .await
+        .unwrap();
+    let principal_id = Uuid::new_v4();
+    let make_room = || {
+        let id = Uuid::now_v7();
+        NewRoom {
+            id,
+            organization_id: scope.organization_id,
+            project_id: scope.project_id,
+            service_instance_id: scope.service_instance_id,
+            created_by_principal_id: principal_id,
+            name: format!("principal-room-{id}"),
+            provider_room_name: None,
+            mode: SessionMode::P2p,
+            state: RoomState::Ready,
+            max_participants: 2,
+            metadata: json!({}),
+        }
+    };
+    for _ in 0..(MAX_ACTIVE_ROOMS_PER_PRINCIPAL - 1) {
+        store.create_room(make_room()).await.unwrap();
+    }
+
+    let first_store = store.clone();
+    let second_store = store.clone();
+    let (first, second) = tokio::join!(
+        first_store.create_room(make_room()),
+        second_store.create_room(make_room())
+    );
+    let results = [first, second];
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                Err(StoreError::PrincipalRoomLimitExceeded { limit: 100 })
+            ))
+            .count(),
+        1
+    );
+    let active_rooms: i64 = sqlx::query_scalar(
+        r"
+        SELECT count(*)
+        FROM flow_rooms
+        WHERE service_instance_id = $1
+          AND created_by_principal_id = $2
+          AND state IN ('provisioning', 'ready')
+        ",
+    )
+    .bind(scope.service_instance_id)
+    .bind(principal_id)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(active_rooms, i64::from(MAX_ACTIVE_ROOMS_PER_PRINCIPAL));
+
+    let blocked_queue = format!("blocked-{}", Uuid::new_v4().simple());
+    create_ticket_for_principal(&store, scope, &blocked_queue, principal_id).await;
+    create_ticket_for_principal(&store, scope, &blocked_queue, Uuid::new_v4()).await;
+    let eligible_queue = format!("eligible-{}", Uuid::new_v4().simple());
+    create_ticket_for_principal(&store, scope, &eligible_queue, Uuid::new_v4()).await;
+    create_ticket_for_principal(&store, scope, &eligible_queue, Uuid::new_v4()).await;
+    let candidate = store
+        .claim_match(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .expect("an eligible match group");
+    assert_eq!(candidate.room.metadata["queue"], eligible_queue);
+}
+
+#[tokio::test]
+async fn idle_room_reaper_uses_real_p2p_and_sfu_activity() {
+    let _guard = DATABASE_TEST_LOCK.lock().await;
+    let Some(store) = test_store(8).await else {
+        return;
+    };
+    let scope = provision_scope(&store, None).await;
+    let principal_id = Uuid::new_v4();
+
+    let empty_p2p_id = Uuid::now_v7();
+    store
+        .create_room(test_room(
+            scope,
+            principal_id,
+            empty_p2p_id,
+            SessionMode::P2p,
+        ))
+        .await
+        .unwrap();
+    backdate_room_empty_since(&store, empty_p2p_id).await;
+    let candidate = claim_room(&store, empty_p2p_id).await;
+    let expired = store
+        .reconcile_room_activity(
+            candidate.room.id,
+            candidate.claim_token,
+            None,
+            Duration::from_mins(10),
+            Duration::from_secs(45),
+        )
+        .await
+        .unwrap()
+        .expect("empty P2P room must expire");
+    assert_eq!(expired.id, empty_p2p_id);
+    assert!(matches!(
+        store
+            .get_room(
+                scope.organization_id,
+                scope.project_id,
+                scope.service_instance_id,
+                empty_p2p_id,
+            )
+            .await,
+        Err(StoreError::NotFound)
+    ));
+
+    let active_p2p_id = Uuid::now_v7();
+    store
+        .create_room(test_room(
+            scope,
+            principal_id,
+            active_p2p_id,
+            SessionMode::P2p,
+        ))
+        .await
+        .unwrap();
+    let connection_id = Uuid::now_v7();
+    store
+        .open_signaling_connection(NewSignalingConnection {
+            connection_id,
+            organization_id: scope.organization_id,
+            project_id: scope.project_id,
+            service_instance_id: scope.service_instance_id,
+            room_id: active_p2p_id,
+            principal_id,
+        })
+        .await
+        .unwrap();
+    backdate_room_empty_since(&store, active_p2p_id).await;
+    let candidate = claim_room(&store, active_p2p_id).await;
+    assert!(
+        store
+            .reconcile_room_activity(
+                candidate.room.id,
+                candidate.claim_token,
+                None,
+                Duration::from_mins(10),
+                Duration::from_secs(45),
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let empty_since: Option<chrono::DateTime<Utc>> =
+        sqlx::query_scalar("SELECT empty_since FROM flow_rooms WHERE id = $1")
+            .bind(active_p2p_id)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert!(empty_since.is_none());
+    assert!(
+        store
+            .close_signaling_connection(connection_id)
+            .await
+            .unwrap()
+    );
+    let empty_since: Option<chrono::DateTime<Utc>> =
+        sqlx::query_scalar("SELECT empty_since FROM flow_rooms WHERE id = $1")
+            .bind(active_p2p_id)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert!(empty_since.is_some());
+
+    let stale_p2p_id = Uuid::now_v7();
+    store
+        .create_room(test_room(
+            scope,
+            principal_id,
+            stale_p2p_id,
+            SessionMode::P2p,
+        ))
+        .await
+        .unwrap();
+    let stale_connection_id = Uuid::now_v7();
+    store
+        .open_signaling_connection(NewSignalingConnection {
+            connection_id: stale_connection_id,
+            organization_id: scope.organization_id,
+            project_id: scope.project_id,
+            service_instance_id: scope.service_instance_id,
+            room_id: stale_p2p_id,
+            principal_id,
+        })
+        .await
+        .unwrap();
+    sqlx::query(
+        r"
+        UPDATE flow_signaling_connections
+        SET last_seen_at = now() - interval '11 minutes'
+        WHERE connection_id = $1
+        ",
+    )
+    .bind(stale_connection_id)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    sqlx::query(
+        r"
+        UPDATE flow_rooms
+        SET empty_since = NULL,
+            activity_checked_at = NULL,
+            activity_check_token = NULL
+        WHERE id = $1
+        ",
+    )
+    .bind(stale_p2p_id)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    let candidate = claim_room(&store, stale_p2p_id).await;
+    assert!(
+        store
+            .reconcile_room_activity(
+                candidate.room.id,
+                candidate.claim_token,
+                None,
+                Duration::from_mins(10),
+                Duration::from_secs(45),
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    let active_sfu_id = Uuid::now_v7();
+    store
+        .create_room(test_room(
+            scope,
+            principal_id,
+            active_sfu_id,
+            SessionMode::Sfu,
+        ))
+        .await
+        .unwrap();
+    backdate_room_empty_since(&store, active_sfu_id).await;
+    let candidate = claim_room(&store, active_sfu_id).await;
+    assert!(
+        store
+            .reconcile_room_activity(
+                candidate.room.id,
+                candidate.claim_token,
+                Some(1),
+                Duration::from_mins(10),
+                Duration::from_secs(45),
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .get_room(
+                scope.organization_id,
+                scope.project_id,
+                scope.service_instance_id,
+                active_sfu_id,
+            )
+            .await
+            .is_ok()
+    );
+
+    let pending_join_id = Uuid::now_v7();
+    store
+        .create_room(test_room(
+            scope,
+            principal_id,
+            pending_join_id,
+            SessionMode::Sfu,
+        ))
+        .await
+        .unwrap();
+    backdate_room_empty_since(&store, pending_join_id).await;
+    store
+        .get_room_for_join(
+            scope.organization_id,
+            scope.project_id,
+            scope.service_instance_id,
+            pending_join_id,
+            Duration::from_mins(5),
+        )
+        .await
+        .unwrap();
+    let candidate = claim_room(&store, pending_join_id).await;
+    assert!(
+        store
+            .reconcile_room_activity(
+                candidate.room.id,
+                candidate.claim_token,
+                Some(0),
+                Duration::from_mins(10),
+                Duration::from_secs(45),
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    sqlx::query(
+        r"
+        UPDATE flow_rooms
+        SET empty_since = now() - interval '11 minutes',
+            join_grace_until = now() - interval '1 second',
+            activity_checked_at = NULL,
+            activity_check_token = NULL
+        WHERE id = $1
+        ",
+    )
+    .bind(pending_join_id)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    let candidate = claim_room(&store, pending_join_id).await;
+    assert!(
+        store
+            .reconcile_room_activity(
+                candidate.room.id,
+                candidate.claim_token,
+                Some(0),
+                Duration::from_mins(10),
+                Duration::from_secs(45),
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    let empty_sfu_id = Uuid::now_v7();
+    store
+        .create_room(test_room(
+            scope,
+            principal_id,
+            empty_sfu_id,
+            SessionMode::Sfu,
+        ))
+        .await
+        .unwrap();
+    backdate_room_empty_since(&store, empty_sfu_id).await;
+    let candidate = claim_room(&store, empty_sfu_id).await;
+    assert!(
+        store
+            .reconcile_room_activity(
+                candidate.room.id,
+                candidate.claim_token,
+                Some(0),
+                Duration::from_mins(10),
+                Duration::from_secs(45),
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
 async fn rooms_and_matchmaking_are_service_instance_scoped() {
     let _guard = DATABASE_TEST_LOCK.lock().await;
     let Some(store) = test_store(4).await else {
@@ -251,6 +634,7 @@ async fn rooms_and_matchmaking_are_service_instance_scoped() {
             organization_id,
             project_id,
             service_instance_id: first.service_instance_id,
+            created_by_principal_id: Uuid::new_v4(),
             name: format!("room-{room_id}"),
             provider_room_name: None,
             mode: SessionMode::P2p,
@@ -565,6 +949,7 @@ async fn delete_is_scoped_idempotent_and_leaves_a_tombstone() {
             organization_id: scope.organization_id,
             project_id: scope.project_id,
             service_instance_id: scope.service_instance_id,
+            created_by_principal_id: principal_id,
             name: format!("room-{room_id}"),
             provider_room_name: Some(format!("flow-{room_id}")),
             mode: SessionMode::Sfu,
@@ -665,6 +1050,7 @@ async fn overview_uses_ready_rooms_active_connections_and_measured_bytes() {
                 organization_id: scope.organization_id,
                 project_id: scope.project_id,
                 service_instance_id: scope.service_instance_id,
+                created_by_principal_id: Uuid::new_v4(),
                 name: format!("room-{room_id}"),
                 provider_room_name,
                 mode,
@@ -773,13 +1159,22 @@ async fn overview_uses_ready_rooms_active_connections_and_measured_bytes() {
 }
 
 async fn create_ticket(store: &PgStore, scope: Scope, queue_name: &str) {
+    create_ticket_for_principal(store, scope, queue_name, Uuid::new_v4()).await;
+}
+
+async fn create_ticket_for_principal(
+    store: &PgStore,
+    scope: Scope,
+    queue_name: &str,
+    principal_id: Uuid,
+) {
     store
         .create_ticket(NewTicket {
             id: Uuid::now_v7(),
             organization_id: scope.organization_id,
             project_id: scope.project_id,
             service_instance_id: scope.service_instance_id,
-            principal_id: Uuid::new_v4(),
+            principal_id,
             queue_name: queue_name.into(),
             mode: SessionMode::P2p,
             match_size: 2,
@@ -788,6 +1183,48 @@ async fn create_ticket(store: &PgStore, scope: Scope, queue_name: &str) {
         })
         .await
         .unwrap();
+}
+
+fn test_room(scope: Scope, principal_id: Uuid, room_id: Uuid, mode: SessionMode) -> NewRoom {
+    NewRoom {
+        id: room_id,
+        organization_id: scope.organization_id,
+        project_id: scope.project_id,
+        service_instance_id: scope.service_instance_id,
+        created_by_principal_id: principal_id,
+        name: format!("room-{room_id}"),
+        provider_room_name: (mode == SessionMode::Sfu).then(|| format!("flow-{room_id}")),
+        mode,
+        state: RoomState::Ready,
+        max_participants: 16,
+        metadata: json!({}),
+    }
+}
+
+async fn backdate_room_empty_since(store: &PgStore, room_id: Uuid) {
+    sqlx::query(
+        r"
+        UPDATE flow_rooms
+        SET empty_since = now() - interval '11 minutes',
+            activity_checked_at = NULL,
+            activity_check_token = NULL
+        WHERE id = $1
+        ",
+    )
+    .bind(room_id)
+    .execute(store.pool())
+    .await
+    .unwrap();
+}
+
+async fn claim_room(store: &PgStore, room_id: Uuid) -> RoomActivityCandidate {
+    store
+        .claim_room_activity_batch(Duration::from_secs(1), 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|candidate| candidate.room.id == room_id)
+        .expect("room activity candidate")
 }
 
 async fn provision_scope(store: &PgStore, parent: Option<(Uuid, Uuid)>) -> Scope {
