@@ -149,4 +149,37 @@ spec:
   egress:
     - {}
 {{- end }}
+{{- if .Values.monitoring.grafana.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow.fullname" . }}-grafana
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: grafana
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}
+        {{- if .Values.monitoring.grafana.vpnAccess.enabled }}
+        {{- range .Values.monitoring.grafana.vpnAccess.sourceCidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.monitoring.grafana.service.port }}
+          protocol: TCP
+  # Grafana reaches the in-cluster Prometheus Service and the host-network
+  # PostgreSQL HA proxy. Destination access is constrained by those services.
+  egress:
+    - {}
+{{- end }}
 {{- end }}

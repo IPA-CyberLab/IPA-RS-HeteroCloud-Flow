@@ -47,3 +47,23 @@ Its web UI is cluster-internal; open a local tunnel with:
     {{ .Values.monitoring.prometheus.service.port }}:{{ .Values.monitoring.prometheus.service.port }}
 {{- end }}
 {{- end }}
+{{- if .Values.monitoring.grafana.enabled }}
+
+Grafana is provisioned with the HeteroCloud Flow and VPN dashboard.
+{{- if .Values.monitoring.grafana.vpnAccess.enabled }}
+Its replicas listen on their nodes' VPN InternalIPs. List every redundant URL:
+  kubectl -n {{ .Release.Namespace }} get pod \
+    -l app.kubernetes.io/component=grafana \
+    -o custom-columns='NODE:.spec.nodeName,VPN_IP:.status.hostIP,READY:.status.containerStatuses[0].ready'
+{{- if eq .Values.monitoring.grafana.service.type "LoadBalancer" }}
+The HeteroNetwork LoadBalancer uses forwarded mode across:
+  kubectl -n {{ .Release.Namespace }} get service \
+    {{ include "flow.fullname" . }}-grafana -o wide
+{{- end }}
+{{- else }}
+Its web UI is cluster-internal; open a local tunnel with:
+  kubectl -n {{ .Release.Namespace }} port-forward \
+    service/{{ include "flow.fullname" . }}-grafana \
+    {{ .Values.monitoring.grafana.service.port }}:{{ .Values.monitoring.grafana.service.port }}
+{{- end }}
+{{- end }}

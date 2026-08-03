@@ -100,9 +100,11 @@ overlay sets:
   metadata is trusted only from the three managed Caddy addresses
 - immutable Redis and Sentinel image digests; LiveKit `v1.13.5` and coturn
   `4.16.0`
-- a pinned Prometheus server that scrapes Kubernetes resource/cAdvisor,
-  LiveKit, and coturn metrics every 15 seconds and retains 15 days or 10 GB on
-  `uc-k8s3p`
+- three Prometheus replicas that scrape Kubernetes resource/cAdvisor,
+  HeteroNetwork, LiveKit, and coturn metrics every 15 seconds and independently
+  retain 15 days or 10 GB
+- three Grafana replicas backed by shared PostgreSQL, with a provisioned
+  Prometheus datasource and Flow/VPN capacity dashboard
 
 The 54-connection total stays below the `heterocloud_flow` role limit of 90 and
 leaves capacity in the PostgreSQL cluster's global 200-connection budget for
@@ -258,6 +260,42 @@ updates with at most one unavailable replica, and a `minAvailable: 2` PDB keep
 two independent copies available during a single-node failure. Long-term
 retention beyond simultaneous loss of the three monitoring nodes still
 requires remote-write or object storage.
+
+## Grafana Dashboards
+
+Grafana is disabled in the chart defaults and enabled by the HeteroNet
+environment overlay. The production topology runs three replicas on distinct
+control-plane nodes with required anti-affinity, rolling updates with at most
+one unavailable replica, and a `minAvailable: 2` PDB. All replicas use the same
+PostgreSQL URL and security key from `monitoring.grafana.existingSecret`; local
+SQLite is not used. This keeps users, sessions, and dashboard metadata
+consistent after a pod or node failure. Replicas wait up to five minutes for
+the database migration lock so a concurrent startup does not fail while one
+replica upgrades the shared schema.
+
+The provisioned `HeteroCloud Flow and VPN` dashboard covers node CPU and
+memory, total and HeteroNetwork-interface bandwidth, LiveKit rooms and
+participants, TURN allocations and transfer rates, VPN peer/path state,
+LazyConnect probes, and monitoring target availability. Prometheus also
+scrapes each Grafana replica and raises `GrafanaReplicaMissing` when fewer than
+the configured replica count are healthy.
+
+Production Grafana binds to each control-plane node's VPN InternalIP. Its
+`heteronetwork.io/public` LoadBalancer runs in `forwarded` mode with three
+ingress replicas, and both `loadBalancerSourceRanges` and NetworkPolicy admit
+only `10.250.0.0/16`. Anonymous access is Viewer-only within that VPN boundary;
+administrative credentials remain in the existing Secret.
+
+The Secret must contain `database-url`, `admin-user`, `admin-password`, and a
+shared `secret-key`. The database URL must use Grafana's `postgres://` scheme,
+not `postgresql://`. List the redundant listeners and Service addresses with:
+
+```bash
+kubectl -n heterocloud-flow get pod \
+  -l app.kubernetes.io/component=grafana \
+  -o custom-columns='POD:.metadata.name,NODE:.spec.nodeName,VPN_IP:.status.hostIP,READY:.status.containerStatuses[0].ready'
+kubectl -n heterocloud-flow get service heterocloud-flow-grafana -o wide
+```
 
 ## Failure Semantics
 

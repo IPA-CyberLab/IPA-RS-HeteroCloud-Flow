@@ -1,0 +1,548 @@
+{{- if .Values.monitoring.grafana.enabled }}
+{{- $grafana := .Values.monitoring.grafana -}}
+{{- $replicaCount := int $grafana.replicaCount -}}
+{{- $serviceType := $grafana.service.type -}}
+{{- if not .Values.monitoring.prometheus.enabled -}}
+{{- fail "monitoring.prometheus.enabled must be true when Grafana is enabled" -}}
+{{- end -}}
+{{- if lt $replicaCount 1 -}}
+{{- fail "monitoring.grafana.replicaCount must be at least 1" -}}
+{{- end -}}
+{{- if empty $grafana.existingSecret -}}
+{{- fail "monitoring.grafana.existingSecret is required" -}}
+{{- end -}}
+{{- if and $grafana.vpnAccess.enabled (empty $grafana.vpnAccess.sourceCidrs) -}}
+{{- fail "monitoring.grafana.vpnAccess.sourceCidrs must contain at least one VPN CIDR when VPN access is enabled" -}}
+{{- end -}}
+{{- if not (has $serviceType (list "ClusterIP" "LoadBalancer")) -}}
+{{- fail "monitoring.grafana.service.type must be ClusterIP or LoadBalancer" -}}
+{{- end -}}
+{{- if eq $serviceType "LoadBalancer" -}}
+{{- if empty $grafana.service.loadBalancerClass -}}
+{{- fail "monitoring.grafana.service.loadBalancerClass is required for LoadBalancer" -}}
+{{- end -}}
+{{- if ne $grafana.service.trafficMode "forwarded" -}}
+{{- fail "monitoring.grafana.service.trafficMode must be forwarded for LoadBalancer" -}}
+{{- end -}}
+{{- if or (lt (int $grafana.service.ingressReplicas) 1) (gt (int $grafana.service.ingressReplicas) 64) -}}
+{{- fail "monitoring.grafana.service.ingressReplicas must be between 1 and 64" -}}
+{{- end -}}
+{{- if empty $grafana.service.loadBalancerSourceRanges -}}
+{{- fail "monitoring.grafana.service.loadBalancerSourceRanges must restrict LoadBalancer access" -}}
+{{- end -}}
+{{- else if or (not (empty $grafana.service.loadBalancerClass)) (not (empty $grafana.service.trafficMode)) -}}
+{{- fail "monitoring.grafana.service LoadBalancer settings require type LoadBalancer" -}}
+{{- end -}}
+{{- if and $grafana.podDisruptionBudget.enabled (gt (int $grafana.podDisruptionBudget.minAvailable) $replicaCount) -}}
+{{- fail "monitoring.grafana.podDisruptionBudget.minAvailable must not exceed replicaCount" -}}
+{{- end -}}
+{{- $grafanaName := printf "%s-grafana" (include "flow.fullname" .) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $grafanaName }}
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    deleteDatasources:
+      - name: Prometheus
+        orgId: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: {{ $grafana.prometheusUrl | quote }}
+        isDefault: true
+        editable: false
+        jsonData:
+          httpMethod: POST
+          prometheusType: Prometheus
+          prometheusVersion: 3.13.2
+          timeInterval: {{ .Values.monitoring.prometheus.scrapeInterval | quote }}
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: HeteroCloud
+        orgId: 1
+        folder: HeteroCloud
+        folderUid: heterocloud
+        type: file
+        disableDeletion: true
+        editable: false
+        updateIntervalSeconds: 30
+        allowUiUpdates: false
+        options:
+          path: /etc/grafana/dashboards
+          foldersFromFilesStructure: false
+  heterocloud-flow.json: |
+    {
+      "annotations": {
+        "list": [
+          {
+            "builtIn": 1,
+            "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+            "enable": true,
+            "hide": true,
+            "iconColor": "rgba(0, 211, 255, 1)",
+            "name": "Annotations & Alerts",
+            "type": "dashboard"
+          }
+        ]
+      },
+      "editable": false,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "liveNow": true,
+      "panels": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 5}]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+          "id": 1,
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"editorMode": "code", "expr": "sum(up{job=\"heteronetwork-agents\"})", "instant": true, "legendFormat": "VPN agents", "range": false, "refId": "A"}],
+          "title": "VPN agents up",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": []},
+          "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+          "id": 2,
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"editorMode": "code", "expr": "heteronetwork:active_peers:sum", "instant": true, "legendFormat": "Active peers", "range": false, "refId": "A"}],
+          "title": "Active VPN peers",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": []},
+          "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+          "id": 3,
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"editorMode": "code", "expr": "sum(livekit_room_total{job=\"flow-livekit\"})", "instant": true, "legendFormat": "Rooms", "range": false, "refId": "A"}],
+          "title": "LiveKit rooms",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 200}]}, "unit": "short"}, "overrides": []},
+          "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+          "id": 4,
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"editorMode": "code", "expr": "flow:turn_allocations:sum", "instant": true, "legendFormat": "Allocations", "range": false, "refId": "A"}],
+          "title": "TURN allocations",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "drawStyle": "line", "fillOpacity": 12, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "max": 1, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.85}]}, "unit": "percentunit"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+          "id": 5,
+          "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
+          "targets": [{"editorMode": "code", "expr": "flow:node_cpu_utilization:ratio{node=~\"$node\"}", "legendFormat": "", "range": true, "refId": "A"}],
+          "title": "Node CPU utilization",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "drawStyle": "line", "fillOpacity": 12, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "max": 1, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.85}]}, "unit": "percentunit"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+          "id": 6,
+          "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
+          "targets": [{"editorMode": "code", "expr": "flow:node_memory_working_set:ratio{node=~\"$node\"}", "legendFormat": "", "range": true, "refId": "A"}],
+          "title": "Node memory utilization",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "Bps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+          "id": 7,
+          "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
+          "targets": [
+            {"editorMode": "code", "expr": "heteronetwork:node_vpn_receive_bytes_per_second{node=~\"$node\"}", "legendFormat": "RX", "range": true, "refId": "A"},
+            {"editorMode": "code", "expr": "heteronetwork:node_vpn_transmit_bytes_per_second{node=~\"$node\"}", "legendFormat": "TX", "range": true, "refId": "B"}
+          ],
+          "title": "HeteroNetwork VPN bandwidth",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "Bps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+          "id": 8,
+          "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
+          "targets": [
+            {"editorMode": "code", "expr": "sum by (node) (flow:node_network_receive_bytes_per_second{node=~\"$node\"})", "legendFormat": "RX", "range": true, "refId": "A"},
+            {"editorMode": "code", "expr": "sum by (node) (flow:node_network_transmit_bytes_per_second{node=~\"$node\"})", "legendFormat": "TX", "range": true, "refId": "B"}
+          ],
+          "title": "Total node network throughput",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+          "id": 9,
+          "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
+          "targets": [
+            {"editorMode": "code", "expr": "sum(livekit_room_total{job=\"flow-livekit\"})", "legendFormat": "Rooms", "range": true, "refId": "A"},
+            {"editorMode": "code", "expr": "sum(livekit_participant_total{job=\"flow-livekit\"})", "legendFormat": "Participants", "range": true, "refId": "B"}
+          ],
+          "title": "LiveKit rooms and participants",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "Bps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+          "id": 10,
+          "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
+          "targets": [
+            {"editorMode": "code", "expr": "sum(rate(turn_total_traffic_rcvb{job=\"flow-coturn\"}[5m]))", "legendFormat": "Client ingress", "range": true, "refId": "A"},
+            {"editorMode": "code", "expr": "sum(rate(turn_total_traffic_sentb{job=\"flow-coturn\"}[5m]))", "legendFormat": "Client egress", "range": true, "refId": "B"},
+            {"editorMode": "code", "expr": "sum(rate(turn_total_traffic_peer_rcvb{job=\"flow-coturn\"}[5m]))", "legendFormat": "Peer ingress", "range": true, "refId": "C"},
+            {"editorMode": "code", "expr": "sum(rate(turn_total_traffic_peer_sentb{job=\"flow-coturn\"}[5m]))", "legendFormat": "Peer egress", "range": true, "refId": "D"}
+          ],
+          "title": "TURN throughput",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 28},
+          "id": 11,
+          "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
+          "targets": [{"editorMode": "code", "expr": "sum by (state) (ipars_agent_path_state_count{job=\"heteronetwork-agents\",node=~\"$node\"})", "legendFormat": "", "range": true, "refId": "A"}],
+          "title": "VPN path states",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "ops"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 28},
+          "id": 12,
+          "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
+          "targets": [
+            {"editorMode": "code", "expr": "sum(rate(ipars_agent_direct_path_probes_confirmed_total{job=\"heteronetwork-agents\",node=~\"$node\"}[5m]))", "legendFormat": "Confirmed", "range": true, "refId": "A"},
+            {"editorMode": "code", "expr": "sum(rate(ipars_agent_direct_path_probes_timeout_total{job=\"heteronetwork-agents\",node=~\"$node\"}[5m]))", "legendFormat": "Timed out", "range": true, "refId": "B"}
+          ],
+          "title": "Lazy-connect probe outcomes",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "red", "index": 0, "text": "Down"}, "1": {"color": "green", "index": 1, "text": "Up"}}, "type": "value"}], "max": 1, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 36},
+          "id": 13,
+          "options": {"alignValue": "left", "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "mergeValues": true, "rowHeight": 0.9, "showValue": "auto", "tooltip": {"mode": "single", "sort": "none"}},
+          "targets": [{"editorMode": "code", "expr": "up{job=~\"heteronetwork-agents|prometheus|flow-livekit|flow-coturn|grafana\"}", "legendFormat": "", "range": true, "refId": "A"}],
+          "title": "Monitoring target availability",
+          "type": "state-timeline"
+        }
+      ],
+      "refresh": "15s",
+      "schemaVersion": 41,
+      "tags": ["heterocloud", "flow", "heteronetwork", "vpn"],
+      "templating": {
+        "list": [
+          {
+            "allValue": ".*",
+            "current": {"text": "All", "value": "$__all"},
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "definition": "label_values(up{job=\"heteronetwork-agents\"}, node)",
+            "includeAll": true,
+            "label": "Node",
+            "multi": true,
+            "name": "node",
+            "options": [],
+            "query": {"query": "label_values(up{job=\"heteronetwork-agents\"}, node)", "refId": "StandardVariableQuery"},
+            "refresh": 1,
+            "regex": "",
+            "sort": 1,
+            "type": "query"
+          }
+        ]
+      },
+      "time": {"from": "now-6h", "to": "now"},
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "HeteroCloud Flow and VPN",
+      "uid": "heterocloud-flow-overview",
+      "version": 1,
+      "weekStart": ""
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $grafanaName }}
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+spec:
+  replicas: {{ $replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  selector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: grafana
+  template:
+    metadata:
+      labels:
+        {{- include "flow.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: grafana
+      annotations:
+        checksum/config: {{ printf "%s-%s" (toJson $grafana) .Chart.Version | sha256sum }}
+    spec:
+      {{- if $grafana.vpnAccess.enabled }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        runAsGroup: 472
+        fsGroup: 472
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grafana
+          image: {{ include "flow.imageRef" $grafana.image }}
+          imagePullPolicy: {{ $grafana.image.pullPolicy }}
+          env:
+            {{- if $grafana.vpnAccess.enabled }}
+            - name: GF_SERVER_HTTP_ADDR
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            {{- else }}
+            - name: GF_SERVER_HTTP_ADDR
+              value: 0.0.0.0
+            {{- end }}
+            - name: GF_SERVER_HTTP_PORT
+              value: {{ $grafana.service.port | quote }}
+            - name: GF_SERVER_ENABLE_GZIP
+              value: "true"
+            - name: GF_DATABASE_TYPE
+              value: postgres
+            - name: GF_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $grafana.existingSecret }}
+                  key: {{ $grafana.secretKeys.databaseUrl }}
+            - name: GF_DATABASE_MAX_OPEN_CONN
+              value: "10"
+            - name: GF_DATABASE_MAX_IDLE_CONN
+              value: "3"
+            - name: GF_DATABASE_CONN_MAX_LIFETIME
+              value: "14400"
+            - name: GF_DATABASE_LOCKING_ATTEMPT_TIMEOUT_SEC
+              value: "300"
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $grafana.existingSecret }}
+                  key: {{ $grafana.secretKeys.adminUser }}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $grafana.existingSecret }}
+                  key: {{ $grafana.secretKeys.adminPassword }}
+            - name: GF_SECURITY_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $grafana.existingSecret }}
+                  key: {{ $grafana.secretKeys.secretKey }}
+            - name: GF_SECURITY_COOKIE_SAMESITE
+              value: strict
+            - name: GF_SECURITY_DISABLE_GRAVATAR
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: {{ $grafana.anonymousViewerEnabled | quote }}
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Viewer
+            - name: GF_AUTH_ANONYMOUS_HIDE_VERSION
+              value: "true"
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_USERS_ALLOW_ORG_CREATE
+              value: "false"
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+            - name: GF_PLUGINS_PLUGIN_ADMIN_ENABLED
+              value: "false"
+            - name: GF_PLUGINS_PREINSTALL_DISABLED
+              value: "true"
+            - name: GF_SNAPSHOTS_EXTERNAL_ENABLED
+              value: "false"
+            - name: GF_UNIFIED_ALERTING_ENABLED
+              value: "false"
+            - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+              value: /etc/grafana/dashboards/heterocloud-flow.json
+            - name: GF_DATE_FORMATS_DEFAULT_TIMEZONE
+              value: browser
+          ports:
+            - name: http
+              containerPort: {{ $grafana.service.port }}
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml $grafana.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 472
+            runAsGroup: 472
+          volumeMounts:
+            - name: provisioning
+              mountPath: /etc/grafana/provisioning
+              readOnly: true
+            - name: dashboards
+              mountPath: /etc/grafana/dashboards
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/grafana
+            - name: logs
+              mountPath: /var/log/grafana
+            - name: tmp
+              mountPath: /tmp
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: provisioning
+          configMap:
+            name: {{ $grafanaName }}
+            defaultMode: 0444
+            items:
+              - key: datasource.yaml
+                path: datasources/managed.yaml
+              - key: dashboards.yaml
+                path: dashboards/managed.yaml
+        - name: dashboards
+          configMap:
+            name: {{ $grafanaName }}
+            defaultMode: 0444
+            items:
+              - key: heterocloud-flow.json
+                path: heterocloud-flow.json
+        - name: data
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: logs
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+      {{- if gt $replicaCount 1 }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "flow.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: grafana
+      {{- end }}
+      {{- with $grafana.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $grafana.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+{{- if $grafana.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $grafanaName }}
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+spec:
+  minAvailable: {{ $grafana.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: grafana
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $grafanaName }}
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+  {{- if eq $serviceType "LoadBalancer" }}
+  annotations:
+    networking.heteronetwork.io/traffic-mode: {{ $grafana.service.trafficMode | quote }}
+    networking.heteronetwork.io/ingress-replicas: {{ $grafana.service.ingressReplicas | quote }}
+  {{- end }}
+spec:
+  type: {{ $serviceType }}
+  {{- if eq $serviceType "LoadBalancer" }}
+  loadBalancerClass: {{ $grafana.service.loadBalancerClass | quote }}
+  allocateLoadBalancerNodePorts: false
+  externalTrafficPolicy: Cluster
+  {{- with $grafana.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  selector:
+    {{- include "flow.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+  ports:
+    - name: http
+      port: {{ $grafana.service.port }}
+      targetPort: http
+      protocol: TCP
+      appProtocol: http
+{{- end }}

@@ -144,6 +144,26 @@ monitoring:
     podDisruptionBudget:
       enabled: true
       minAvailable: 2
+  grafana:
+    enabled: true
+    replicaCount: 3
+    anonymousViewerEnabled: true
+    service:
+      type: LoadBalancer
+      loadBalancerClass: heteronetwork.io/public
+      trafficMode: forwarded
+      ingressReplicas: 3
+      loadBalancerSourceRanges:
+        - 10.250.0.0/16
+    vpnAccess:
+      enabled: true
+      sourceCidrs:
+        - 10.250.0.0/16
+    nodeSelector:
+      node-role.kubernetes.io/control-plane: ""
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 2
 
 redis:
   enabled: true

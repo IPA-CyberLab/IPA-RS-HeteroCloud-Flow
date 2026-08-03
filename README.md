@@ -15,6 +15,7 @@ own customer accounts, organizations, projects, billing, or IAM policy.
 | Redis Sentinel | Cross-replica signaling and LiveKit distributed coordination |
 | LiveKit | Third-party SFU media data plane |
 | coturn | STUN/TURN data plane for P2P and relay fallback |
+| Prometheus and Grafana | HA Flow, Kubernetes, and HeteroNetwork capacity monitoring |
 
 All Flow-authored backend services are Rust. LiveKit is an upstream Go
 data-plane dependency and coturn, PostgreSQL, and Redis are upstream

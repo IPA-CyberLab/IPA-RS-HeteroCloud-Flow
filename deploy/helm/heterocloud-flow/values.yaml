@@ -266,6 +266,44 @@ monitoring:
       limits:
         cpu: "1"
         memory: 768Mi
+  grafana:
+    enabled: false
+    replicaCount: 1
+    image:
+      repository: grafana/grafana
+      tag: 13.1.0
+      digest: sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63
+      pullPolicy: IfNotPresent
+    prometheusUrl: http://heterocloud-flow-prometheus:9090
+    existingSecret: heterocloud-flow-grafana
+    secretKeys:
+      databaseUrl: database-url
+      adminUser: admin-user
+      adminPassword: admin-password
+      secretKey: secret-key
+    anonymousViewerEnabled: false
+    service:
+      port: 3000
+      type: ClusterIP
+      loadBalancerClass: ""
+      trafficMode: ""
+      ingressReplicas: 1
+      loadBalancerSourceRanges: []
+    vpnAccess:
+      enabled: false
+      sourceCidrs: []
+    nodeSelector: {}
+    tolerations: []
+    podDisruptionBudget:
+      enabled: false
+      minAvailable: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
 
 postgresql-ha:
   enabled: false

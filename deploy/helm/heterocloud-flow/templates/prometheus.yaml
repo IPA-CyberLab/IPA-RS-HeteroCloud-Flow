@@ -112,6 +112,29 @@ data:
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: pod
 
+      {{- if .Values.monitoring.grafana.enabled }}
+      - job_name: grafana
+        metrics_path: /metrics
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [{{ .Release.Namespace | quote }}]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]
+            action: keep
+            regex: {{ .Release.Name | quote }}
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            action: keep
+            regex: grafana
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            action: keep
+            regex: http
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+      {{- end }}
+
       - job_name: kubernetes-nodes-resource
         scheme: https
         authorization:
@@ -284,6 +307,15 @@ data:
               severity: warning
             annotations:
               summary: Fewer than {{ $replicaCount }} Prometheus replicas are available
+          {{- if .Values.monitoring.grafana.enabled }}
+          - alert: GrafanaReplicaMissing
+            expr: count(up{job="grafana"} == 1) < {{ .Values.monitoring.grafana.replicaCount }}
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: Fewer than {{ .Values.monitoring.grafana.replicaCount }} Grafana replicas are available
+          {{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
