@@ -100,6 +100,9 @@ overlay sets:
   metadata is trusted only from the three managed Caddy addresses
 - immutable Redis and Sentinel image digests; LiveKit `v1.13.5` and coturn
   `4.16.0`
+- a pinned Prometheus server that scrapes Kubernetes resource/cAdvisor,
+  LiveKit, and coturn metrics every 15 seconds and retains 15 days or 10 GB on
+  `uc-k8s3p`
 
 The 54-connection total stays below the `heterocloud_flow` role limit of 90 and
 leaves capacity in the PostgreSQL cluster's global 200-connection budget for
@@ -211,6 +214,36 @@ externalRedis:
 
 If Redis authentication is enabled, provide a complete LiveKit config through
 `livekit.existingConfigSecret`; it must contain matching Redis credentials.
+
+## Prometheus Monitoring
+
+Prometheus is disabled by default and enabled by the HeteroNet environment
+overlay. It uses read-only Kubernetes discovery and node-proxy permissions to
+collect:
+
+- node, pod, and container CPU and memory from kubelet resource metrics
+- root-interface and container network counters from cAdvisor
+- current coturn allocations and aggregate packet/byte counters
+- LiveKit room, participant, packet, process, and Go runtime metrics
+
+Unbounded coturn per-credential series are discarded at ingestion; aggregate
+`turn_total_*` counters remain available. Recording rules publish node CPU,
+memory, network rates, and TURN allocation utilization. Alerting rules are
+visible in Prometheus, but notifications require a separately configured
+Alertmanager.
+
+The service is `ClusterIP` only. Reach the UI without exposing it publicly:
+
+```bash
+kubectl -n heterocloud-flow port-forward \
+  service/heterocloud-flow-prometheus 9090:9090
+```
+
+The HeteroNet overlay uses a single-node `hostPath` because the cluster has no
+shared `StorageClass`. Metrics survive pod restarts and Helm rollouts on the
+pinned node, but loss of that node makes monitoring unavailable until it
+returns. Deploy remote-write or shared storage before treating monitoring as
+HA.
 
 ## Failure Semantics
 

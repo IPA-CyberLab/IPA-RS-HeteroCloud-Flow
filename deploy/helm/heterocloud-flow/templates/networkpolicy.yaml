@@ -115,4 +115,32 @@ spec:
             cidr: ::/0
   egress:
     - {}
+{{- if .Values.monitoring.prometheus.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow.fullname" . }}-prometheus
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: prometheus
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - port: {{ .Values.monitoring.prometheus.service.port }}
+          protocol: TCP
+  # Prometheus needs the Kubernetes API service plus host-network metrics on
+  # every managed node. Scrape targets remain constrained by its configuration
+  # and read-only RBAC permissions.
+  egress:
+    - {}
+{{- end }}
 {{- end }}

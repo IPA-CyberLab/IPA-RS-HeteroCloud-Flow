@@ -115,6 +115,17 @@ coturn:
   annotations:
     networking.heteronetwork.io/ingress-replicas: "3"
 
+monitoring:
+  prometheus:
+    enabled: true
+    storage:
+      type: hostPath
+      hostPath: /var/lib/heterocloud-flow/prometheus
+    # Prometheus is intentionally single-replica because this cluster has no
+    # shared StorageClass. Pinning keeps its local TSDB stable across rollouts.
+    nodeSelector:
+      kubernetes.io/hostname: uc-k8s3p
+
 redis:
   enabled: true
   image:

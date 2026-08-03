@@ -26,3 +26,11 @@ Confirm the configured public URLs resolve to the assigned addresses:
 Flow and LiveKit listeners are HTTP internally. The configured HTTPS/WSS
 hostnames require per-node HeteroNetwork Caddy TLS termination. Stable multi-A
 DNS and certificate provisioning are external to this chart.
+{{- if .Values.monitoring.prometheus.enabled }}
+
+Prometheus is collecting Kubernetes resource, cAdvisor, LiveKit, and coturn
+metrics. Its web UI is cluster-internal; open a local tunnel with:
+  kubectl -n {{ .Release.Namespace }} port-forward \
+    service/{{ include "flow.fullname" . }}-prometheus \
+    {{ .Values.monitoring.prometheus.service.port }}:{{ .Values.monitoring.prometheus.service.port }}
+{{- end }}

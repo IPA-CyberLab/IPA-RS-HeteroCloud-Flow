@@ -44,6 +44,15 @@ app.kubernetes.io/part-of: heterocloud-flow
 {{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) }}
 {{- end }}
 
+{{- define "flow.imageRef" -}}
+{{- $reference := printf "%s:%s" .repository .tag -}}
+{{- if .digest -}}
+{{- printf "%s@%s" $reference .digest -}}
+{{- else -}}
+{{- $reference -}}
+{{- end -}}
+{{- end }}
+
 {{- define "flow.redisSentinelUrls" -}}
 {{- if .Values.redis.enabled -}}
 redis://{{ .Values.redis.fullnameOverride }}:26379

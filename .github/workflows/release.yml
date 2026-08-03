@@ -63,6 +63,8 @@ jobs:
         run: helm lint deploy/helm/heterocloud-flow -f deploy/helm/heterocloud-flow/ci/test-values.yaml
       - name: Test coturn external IP mappings
         run: bash deploy/helm/heterocloud-flow/scripts/test-coturn-template.sh
+      - name: Validate Prometheus configuration
+        run: bash deploy/helm/heterocloud-flow/scripts/test-prometheus-template.sh
       - name: Render chart
         run: >-
           helm template flow deploy/helm/heterocloud-flow

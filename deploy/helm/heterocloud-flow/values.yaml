@@ -213,6 +213,44 @@ externalRedis:
   passwordSecretKey: ""
   sentinelPasswordSecretKey: ""
 
+monitoring:
+  prometheus:
+    enabled: false
+    image:
+      repository: prom/prometheus
+      tag: v3.13.2-distroless
+      digest: sha256:64f71bb84e03c855948418b0fc5dea53e9543d8e3fc9931598f583805507f05e
+      pullPolicy: IfNotPresent
+    # The busybox Prometheus variant is used only to initialize hostPath
+    # ownership. The server itself always runs from the distroless image.
+    initImage:
+      repository: prom/prometheus
+      tag: v3.13.2
+      digest: sha256:508729e0e2d18e11fd742a5a5ca70e557b940a93948c3c95fd0123a6fd538b69
+      pullPolicy: IfNotPresent
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    retentionTime: 15d
+    retentionSize: 10GB
+    externalLabels:
+      cluster: heterocloud-flow
+    service:
+      port: 9090
+    storage:
+      type: emptyDir
+      emptyDir:
+        sizeLimit: 10Gi
+      hostPath: ""
+    nodeSelector: {}
+    tolerations: []
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 768Mi
+
 postgresql-ha:
   enabled: false
   fullnameOverride: heterocloud-flow-postgresql

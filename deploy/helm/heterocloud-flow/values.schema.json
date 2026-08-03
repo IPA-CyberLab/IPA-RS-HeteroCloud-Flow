@@ -277,11 +277,110 @@
         }
       }
     },
+    "monitoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prometheus"],
+      "properties": {
+        "prometheus": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "image",
+            "initImage",
+            "scrapeInterval",
+            "evaluationInterval",
+            "retentionTime",
+            "retentionSize",
+            "externalLabels",
+            "service",
+            "storage",
+            "nodeSelector",
+            "tolerations",
+            "resources"
+          ],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "image": {"$ref": "#/$defs/containerImage"},
+            "initImage": {"$ref": "#/$defs/containerImage"},
+            "scrapeInterval": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(ms|s|m|h)$"
+            },
+            "evaluationInterval": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(ms|s|m|h)$"
+            },
+            "retentionTime": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(h|d|w|y)$"
+            },
+            "retentionSize": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(MB|GB|TB|MiB|GiB|TiB)$"
+            },
+            "externalLabels": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": {"type": "string", "minLength": 1}
+            },
+            "service": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["port"],
+              "properties": {
+                "port": {"type": "integer", "minimum": 1024, "maximum": 65535}
+              }
+            },
+            "storage": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "emptyDir", "hostPath"],
+              "properties": {
+                "type": {"type": "string", "enum": ["emptyDir", "hostPath"]},
+                "emptyDir": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["sizeLimit"],
+                  "properties": {
+                    "sizeLimit": {"type": "string", "pattern": "^[1-9][0-9]*(Mi|Gi|Ti)$"}
+                  }
+                },
+                "hostPath": {"type": "string"}
+              }
+            },
+            "nodeSelector": {
+              "type": "object",
+              "additionalProperties": {"type": "string"}
+            },
+            "tolerations": {
+              "type": "array",
+              "items": {"type": "object"}
+            },
+            "resources": {"type": "object"}
+          }
+        }
+      }
+    },
     "secrets": {
       "type": "object",
       "properties": {
         "existingSecret": {"type": "string"},
         "create": {"type": "boolean"}
+      }
+    }
+  },
+  "$defs": {
+    "containerImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag", "digest", "pullPolicy"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string", "minLength": 1},
+        "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "pullPolicy": {"type": "string", "enum": ["Always", "IfNotPresent", "Never"]}
       }
     }
   }

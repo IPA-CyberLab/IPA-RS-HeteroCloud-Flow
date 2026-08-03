@@ -1,0 +1,340 @@
+{{- if .Values.monitoring.prometheus.enabled }}
+{{- $prometheus := .Values.monitoring.prometheus -}}
+{{- $prometheusName := printf "%s-prometheus" (include "flow.fullname" .) -}}
+{{- $clusterRoleName := printf "%s-%s" $prometheusName .Release.Namespace | trunc 63 | trimSuffix "-" -}}
+{{- $relayPorts := add1 (sub (int .Values.coturn.relayPortMax) (int .Values.coturn.relayPortMin)) -}}
+{{- $relayCapacity := mul $relayPorts (int .Values.coturn.replicaCount) -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $prometheusName }}
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $clusterRoleName }}
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - nodes/metrics
+      - nodes/proxy
+      - pods
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $clusterRoleName }}
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $clusterRoleName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $prometheusName }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $prometheusName }}
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: {{ $prometheus.scrapeInterval }}
+      evaluation_interval: {{ $prometheus.evaluationInterval }}
+      external_labels:
+        {{- toYaml $prometheus.externalLabels | nindent 8 }}
+    rule_files:
+      - /etc/prometheus/rules.yml
+    scrape_configs:
+      - job_name: prometheus
+        static_configs:
+          - targets: [127.0.0.1:{{ $prometheus.service.port }}]
+
+      - job_name: kubernetes-nodes-resource
+        scheme: https
+        authorization:
+          credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          server_name: kubernetes.default.svc
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: node
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/$1/proxy/metrics/resource
+
+      - job_name: kubernetes-nodes-cadvisor
+        scheme: https
+        authorization:
+          credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          server_name: kubernetes.default.svc
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: node
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+
+      - job_name: flow-livekit
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [{{ .Release.Namespace | quote }}]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]
+            action: keep
+            regex: {{ .Release.Name | quote }}
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            action: keep
+            regex: livekit
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            action: keep
+            regex: metrics
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+
+      - job_name: flow-coturn
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [{{ .Release.Namespace | quote }}]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]
+            action: keep
+            regex: {{ .Release.Name | quote }}
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            action: keep
+            regex: coturn
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            action: keep
+            regex: metrics
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+        metric_relabel_configs:
+          # Per-credential series are unbounded and are not required for
+          # aggregate relay capacity or transfer-rate monitoring.
+          - source_labels: [__name__]
+            action: drop
+            regex: turn_traffic_.*
+  rules.yml: |
+    groups:
+      - name: heterocloud-flow-capacity
+        interval: {{ $prometheus.evaluationInterval }}
+        rules:
+          - record: flow:turn_allocations:sum
+            expr: sum(turn_total_allocations{job="flow-coturn"})
+          - record: flow:turn_allocation_utilization:ratio
+            expr: flow:turn_allocations:sum / {{ $relayCapacity }}
+          - record: flow:node_cpu_utilization:ratio
+            expr: rate(node_cpu_usage_seconds_total{job="kubernetes-nodes-resource"}[5m]) / on (node) machine_cpu_cores{job="kubernetes-nodes-cadvisor"}
+          - record: flow:node_memory_working_set:ratio
+            expr: node_memory_working_set_bytes{job="kubernetes-nodes-resource"} / on (node) machine_memory_bytes{job="kubernetes-nodes-cadvisor"}
+          - record: flow:node_network_receive_bytes_per_second
+            expr: sum by (node, interface) (rate(container_network_receive_bytes_total{job="kubernetes-nodes-cadvisor",id="/"}[5m]))
+          - record: flow:node_network_transmit_bytes_per_second
+            expr: sum by (node, interface) (rate(container_network_transmit_bytes_total{job="kubernetes-nodes-cadvisor",id="/"}[5m]))
+          - alert: FlowTurnAllocationCapacityHigh
+            expr: flow:turn_allocation_utilization:ratio > 0.8
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: TURN relay allocation capacity is above 80 percent
+          - alert: FlowMetricsTargetMissing
+            expr: count(up{job="flow-coturn"} == 1) < {{ .Values.coturn.replicaCount }} or count(up{job="flow-livekit"} == 1) < {{ .Values.livekit.replicaCount }}
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: A Flow media metrics target is unavailable
+          - alert: FlowNodeCpuHigh
+            expr: flow:node_cpu_utilization:ratio > 0.85
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: Kubernetes node CPU utilization is above 85 percent
+          - alert: FlowNodeMemoryHigh
+            expr: flow:node_memory_working_set:ratio > 0.85
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: Kubernetes node memory working set is above 85 percent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $prometheusName }}
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: prometheus
+  template:
+    metadata:
+      labels:
+        {{- include "flow.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: prometheus
+      annotations:
+        checksum/config: {{ printf "%s-%s" (toJson $prometheus) .Chart.Version | sha256sum }}
+    spec:
+      serviceAccountName: {{ $prometheusName }}
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      {{- if eq $prometheus.storage.type "hostPath" }}
+      initContainers:
+        - name: prepare-storage
+          image: {{ include "flow.imageRef" $prometheus.initImage }}
+          imagePullPolicy: {{ $prometheus.initImage.pullPolicy }}
+          command: [/bin/sh, -ec, "chown -R 65532:65532 /prometheus"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            - name: data
+              mountPath: /prometheus
+      {{- end }}
+      containers:
+        - name: prometheus
+          image: {{ include "flow.imageRef" $prometheus.image }}
+          imagePullPolicy: {{ $prometheus.image.pullPolicy }}
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time={{ $prometheus.retentionTime }}
+            - --storage.tsdb.retention.size={{ $prometheus.retentionSize }}
+            - --storage.tsdb.wal-compression
+            - --web.listen-address=0.0.0.0:{{ $prometheus.service.port }}
+          ports:
+            - name: http
+              containerPort: {{ $prometheus.service.port }}
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+          startupProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml $prometheus.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      terminationGracePeriodSeconds: 60
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $prometheusName }}
+            defaultMode: 0444
+        - name: data
+          {{- if eq $prometheus.storage.type "hostPath" }}
+          hostPath:
+            path: {{ required "monitoring.prometheus.storage.hostPath is required for hostPath storage" $prometheus.storage.hostPath | quote }}
+            type: DirectoryOrCreate
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ $prometheus.storage.emptyDir.sizeLimit }}
+          {{- end }}
+      {{- with $prometheus.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $prometheus.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $prometheusName }}
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "flow.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+  ports:
+    - name: http
+      port: {{ $prometheus.service.port }}
+      targetPort: http
+      protocol: TCP
+      appProtocol: http
+{{- end }}
