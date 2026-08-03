@@ -216,6 +216,7 @@ externalRedis:
 monitoring:
   prometheus:
     enabled: false
+    replicaCount: 1
     image:
       repository: prom/prometheus
       tag: v3.13.2-distroless
@@ -236,6 +237,11 @@ monitoring:
       cluster: heterocloud-flow
     service:
       port: 9090
+      type: ClusterIP
+      loadBalancerClass: ""
+      trafficMode: ""
+      ingressReplicas: 1
+      loadBalancerSourceRanges: []
     vpnAccess:
       enabled: false
       sourceCidrs: []
@@ -250,6 +256,9 @@ monitoring:
       hostPath: ""
     nodeSelector: {}
     tolerations: []
+    podDisruptionBudget:
+      enabled: false
+      minAvailable: 1
     resources:
       requests:
         cpu: 200m

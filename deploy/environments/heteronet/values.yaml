@@ -118,6 +118,14 @@ coturn:
 monitoring:
   prometheus:
     enabled: true
+    replicaCount: 3
+    service:
+      type: LoadBalancer
+      loadBalancerClass: heteronetwork.io/public
+      trafficMode: forwarded
+      ingressReplicas: 3
+      loadBalancerSourceRanges:
+        - 10.250.0.0/16
     vpnAccess:
       enabled: true
       sourceCidrs:
@@ -129,10 +137,13 @@ monitoring:
     storage:
       type: hostPath
       hostPath: /var/lib/heterocloud-flow/prometheus
-    # Prometheus is intentionally single-replica because this cluster has no
-    # shared StorageClass. Pinning keeps its local TSDB stable across rollouts.
+    # Every replica keeps a complete local TSDB on a separate control-plane
+    # node. A failed node loses one copy without interrupting queries.
     nodeSelector:
-      kubernetes.io/hostname: uc-k8s3p
+      node-role.kubernetes.io/control-plane: ""
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 2
 
 redis:
   enabled: true

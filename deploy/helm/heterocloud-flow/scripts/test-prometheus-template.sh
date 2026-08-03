@@ -23,7 +23,13 @@ grep -q 'job_name: heteronetwork-agents' "$work_dir/rendered.yaml"
 grep -q 'record: heteronetwork:node_vpn_receive_bytes_per_second' "$work_dir/rendered.yaml"
 grep -q 'hostNetwork: true' "$work_dir/rendered.yaml"
 grep -q -- '--web.listen-address=$(PROMETHEUS_LISTEN_ADDRESS):9090' "$work_dir/rendered.yaml"
-grep -q 'heterocloud-flow-prometheus.heterocloud-flow.svc:9090' "$work_dir/rendered.yaml"
+grep -q 'replicas: 3' "$work_dir/rendered.yaml"
+grep -q 'kind: PodDisruptionBudget' "$work_dir/rendered.yaml"
+grep -q 'minAvailable: 2' "$work_dir/rendered.yaml"
+grep -q 'loadBalancerClass: "heteronetwork.io/public"' "$work_dir/rendered.yaml"
+grep -q 'networking.heteronetwork.io/traffic-mode: "forwarded"' "$work_dir/rendered.yaml"
+grep -q 'networking.heteronetwork.io/ingress-replicas: "3"' "$work_dir/rendered.yaml"
+grep -q '10.250.0.0/16' "$work_dir/rendered.yaml"
 
 awk '
   /^  prometheus.yml: \|$/ { emit = 1; next }

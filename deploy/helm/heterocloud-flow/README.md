@@ -235,24 +235,29 @@ HeteroNetwork Agent at its node InternalIP and VPN Web UI metrics port. Alerting
 rules are visible in Prometheus, but notifications require a separately
 configured Alertmanager.
 
-By default the service is `ClusterIP` only. When
-`monitoring.prometheus.vpnAccess.enabled=true`, Prometheus uses `hostNetwork`
-and binds only to the selected Kubernetes node InternalIP. On the HeteroNetwork
-deployment that address is the node's `10.250.0.0/16` VPN address, so the UI is
-reachable directly from joined VPN clients and does not listen on a public IP:
+By default the service is `ClusterIP` only. The HeteroNetwork deployment runs
+three Prometheus replicas on distinct control-plane nodes. Each process binds
+to its node's VPN InternalIP, while a `heteronetwork.io/public` LoadBalancer
+Service in `forwarded` mode can route any selected ingress gateway to any Ready
+replica. `loadBalancerSourceRanges` is mandatory for this monitoring Service;
+the production values admit only the HeteroNetwork VPN CIDR instead of exposing
+the unauthenticated Prometheus UI to the Internet.
+
+List the redundant VPN listeners and forwarded Service ingress addresses:
 
 ```bash
-PROMETHEUS_VPN_IP=$(kubectl -n heterocloud-flow get pod \
+kubectl -n heterocloud-flow get pod \
   -l app.kubernetes.io/component=prometheus \
-  -o jsonpath='{.items[0].status.hostIP}')
-echo "http://${PROMETHEUS_VPN_IP}:9090"
+  -o custom-columns='POD:.metadata.name,NODE:.spec.nodeName,VPN_IP:.status.hostIP,READY:.status.containerStatuses[0].ready'
+kubectl -n heterocloud-flow get service heterocloud-flow-prometheus -o wide
 ```
 
-The HeteroNet overlay uses a single-node `hostPath` because the cluster has no
-shared `StorageClass`. Metrics survive pod restarts and Helm rollouts on the
-pinned node, but loss of that node makes monitoring unavailable until it
-returns. Deploy remote-write or shared storage before treating monitoring as
-HA.
+The cluster has no shared `StorageClass`, so every replica stores a complete
+TSDB on its own node-local `hostPath`. Required pod anti-affinity, rolling
+updates with at most one unavailable replica, and a `minAvailable: 2` PDB keep
+two independent copies available during a single-node failure. Long-term
+retention beyond simultaneous loss of the three monitoring nodes still
+requires remote-write or object storage.
 
 ## Failure Semantics
 

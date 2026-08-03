@@ -1,7 +1,34 @@
 {{- if .Values.monitoring.prometheus.enabled }}
 {{- $prometheus := .Values.monitoring.prometheus -}}
+{{- $replicaCount := int $prometheus.replicaCount -}}
+{{- $serviceType := $prometheus.service.type -}}
+{{- if lt $replicaCount 1 -}}
+{{- fail "monitoring.prometheus.replicaCount must be at least 1" -}}
+{{- end -}}
 {{- if and $prometheus.vpnAccess.enabled (empty $prometheus.vpnAccess.sourceCidrs) -}}
 {{- fail "monitoring.prometheus.vpnAccess.sourceCidrs must contain at least one VPN CIDR when VPN access is enabled" -}}
+{{- end -}}
+{{- if not (has $serviceType (list "ClusterIP" "LoadBalancer")) -}}
+{{- fail "monitoring.prometheus.service.type must be ClusterIP or LoadBalancer" -}}
+{{- end -}}
+{{- if eq $serviceType "LoadBalancer" -}}
+{{- if empty $prometheus.service.loadBalancerClass -}}
+{{- fail "monitoring.prometheus.service.loadBalancerClass is required for LoadBalancer" -}}
+{{- end -}}
+{{- if ne $prometheus.service.trafficMode "forwarded" -}}
+{{- fail "monitoring.prometheus.service.trafficMode must be forwarded for LoadBalancer" -}}
+{{- end -}}
+{{- if or (lt (int $prometheus.service.ingressReplicas) 1) (gt (int $prometheus.service.ingressReplicas) 64) -}}
+{{- fail "monitoring.prometheus.service.ingressReplicas must be between 1 and 64" -}}
+{{- end -}}
+{{- if empty $prometheus.service.loadBalancerSourceRanges -}}
+{{- fail "monitoring.prometheus.service.loadBalancerSourceRanges must restrict LoadBalancer access" -}}
+{{- end -}}
+{{- else if or (not (empty $prometheus.service.loadBalancerClass)) (not (empty $prometheus.service.trafficMode)) -}}
+{{- fail "monitoring.prometheus.service LoadBalancer settings require type LoadBalancer" -}}
+{{- end -}}
+{{- if and $prometheus.podDisruptionBudget.enabled (gt (int $prometheus.podDisruptionBudget.minAvailable) $replicaCount) -}}
+{{- fail "monitoring.prometheus.podDisruptionBudget.minAvailable must not exceed replicaCount" -}}
 {{- end -}}
 {{- $prometheusName := printf "%s-prometheus" (include "flow.fullname" .) -}}
 {{- $clusterRoleName := printf "%s-%s" $prometheusName .Release.Namespace | trunc 63 | trimSuffix "-" -}}
@@ -66,9 +93,24 @@ data:
       - /etc/prometheus/rules.yml
     scrape_configs:
       - job_name: prometheus
-        static_configs:
-          - targets:
-              - {{ $prometheusName }}.{{ .Release.Namespace }}.svc:{{ $prometheus.service.port }}
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [{{ .Release.Namespace | quote }}]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]
+            action: keep
+            regex: {{ .Release.Name | quote }}
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            action: keep
+            regex: prometheus
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            action: keep
+            regex: http
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
 
       - job_name: kubernetes-nodes-resource
         scheme: https
@@ -235,6 +277,13 @@ data:
             annotations:
               summary: At least one HeteroNetwork Agent metrics endpoint is unavailable
           {{- end }}
+          - alert: PrometheusReplicaMissing
+            expr: count(up{job="prometheus"} == 1) < {{ $replicaCount }}
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: Fewer than {{ $replicaCount }} Prometheus replicas are available
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -244,9 +293,12 @@ metadata:
     {{- include "flow.labels" . | nindent 4 }}
     app.kubernetes.io/component: prometheus
 spec:
-  replicas: 1
+  replicas: {{ $replicaCount }}
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
   selector:
     matchLabels:
       {{- include "flow.selectorLabels" . | nindent 6 }}
@@ -368,6 +420,16 @@ spec:
           emptyDir:
             sizeLimit: {{ $prometheus.storage.emptyDir.sizeLimit }}
           {{- end }}
+      {{- if gt $replicaCount 1 }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "flow.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: prometheus
+      {{- end }}
       {{- with $prometheus.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -377,6 +439,22 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 ---
+{{- if $prometheus.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $prometheusName }}
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+spec:
+  minAvailable: {{ $prometheus.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: prometheus
+---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -384,8 +462,22 @@ metadata:
   labels:
     {{- include "flow.labels" . | nindent 4 }}
     app.kubernetes.io/component: prometheus
+  {{- if eq $serviceType "LoadBalancer" }}
+  annotations:
+    networking.heteronetwork.io/traffic-mode: {{ $prometheus.service.trafficMode | quote }}
+    networking.heteronetwork.io/ingress-replicas: {{ $prometheus.service.ingressReplicas | quote }}
+  {{- end }}
 spec:
-  type: ClusterIP
+  type: {{ $serviceType }}
+  {{- if eq $serviceType "LoadBalancer" }}
+  loadBalancerClass: {{ $prometheus.service.loadBalancerClass | quote }}
+  allocateLoadBalancerNodePorts: false
+  externalTrafficPolicy: Cluster
+  {{- with $prometheus.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
   selector:
     {{- include "flow.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: prometheus
