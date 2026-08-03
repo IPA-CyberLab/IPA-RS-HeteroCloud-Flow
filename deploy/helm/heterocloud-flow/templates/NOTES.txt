@@ -29,8 +29,18 @@ DNS and certificate provisioning are external to this chart.
 {{- if .Values.monitoring.prometheus.enabled }}
 
 Prometheus is collecting Kubernetes resource, cAdvisor, LiveKit, and coturn
-metrics. Its web UI is cluster-internal; open a local tunnel with:
+metrics.
+{{- if .Values.monitoring.prometheus.vpnAccess.enabled }}
+Its web UI listens only on the selected node's InternalIP. In a HeteroNetwork
+cluster, retrieve the VPN URL with:
+  PROMETHEUS_VPN_IP=$(kubectl -n {{ .Release.Namespace }} get pod \
+    -l app.kubernetes.io/component=prometheus \
+    -o jsonpath='{.items[0].status.hostIP}')
+  echo "http://${PROMETHEUS_VPN_IP}:{{ .Values.monitoring.prometheus.service.port }}"
+{{- else }}
+Its web UI is cluster-internal; open a local tunnel with:
   kubectl -n {{ .Release.Namespace }} port-forward \
     service/{{ include "flow.fullname" . }}-prometheus \
     {{ .Values.monitoring.prometheus.service.port }}:{{ .Values.monitoring.prometheus.service.port }}
+{{- end }}
 {{- end }}

@@ -134,6 +134,12 @@ spec:
   ingress:
     - from:
         - podSelector: {}
+        {{- if .Values.monitoring.prometheus.vpnAccess.enabled }}
+        {{- range .Values.monitoring.prometheus.vpnAccess.sourceCidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+        {{- end }}
       ports:
         - port: {{ .Values.monitoring.prometheus.service.port }}
           protocol: TCP

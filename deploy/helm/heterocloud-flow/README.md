@@ -223,20 +223,29 @@ collect:
 
 - node, pod, and container CPU and memory from kubelet resource metrics
 - root-interface and container network counters from cAdvisor
+- HeteroNetwork Agent path, lazy-connect, relay, and packet-flow metrics
 - current coturn allocations and aggregate packet/byte counters
 - LiveKit room, participant, packet, process, and Go runtime metrics
 
 Unbounded coturn per-credential series are discarded at ingestion; aggregate
 `turn_total_*` counters remain available. Recording rules publish node CPU,
-memory, network rates, and TURN allocation utilization. Alerting rules are
-visible in Prometheus, but notifications require a separately configured
-Alertmanager.
+memory, network rates, HeteroNetwork VPN-interface transfer rates, and TURN
+allocation utilization. Kubernetes node discovery automatically follows every
+HeteroNetwork Agent at its node InternalIP and VPN Web UI metrics port. Alerting
+rules are visible in Prometheus, but notifications require a separately
+configured Alertmanager.
 
-The service is `ClusterIP` only. Reach the UI without exposing it publicly:
+By default the service is `ClusterIP` only. When
+`monitoring.prometheus.vpnAccess.enabled=true`, Prometheus uses `hostNetwork`
+and binds only to the selected Kubernetes node InternalIP. On the HeteroNetwork
+deployment that address is the node's `10.250.0.0/16` VPN address, so the UI is
+reachable directly from joined VPN clients and does not listen on a public IP:
 
 ```bash
-kubectl -n heterocloud-flow port-forward \
-  service/heterocloud-flow-prometheus 9090:9090
+PROMETHEUS_VPN_IP=$(kubectl -n heterocloud-flow get pod \
+  -l app.kubernetes.io/component=prometheus \
+  -o jsonpath='{.items[0].status.hostIP}')
+echo "http://${PROMETHEUS_VPN_IP}:9090"
 ```
 
 The HeteroNet overlay uses a single-node `hostPath` because the cluster has no

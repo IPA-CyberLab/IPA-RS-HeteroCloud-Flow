@@ -1,5 +1,8 @@
 {{- if .Values.monitoring.prometheus.enabled }}
 {{- $prometheus := .Values.monitoring.prometheus -}}
+{{- if and $prometheus.vpnAccess.enabled (empty $prometheus.vpnAccess.sourceCidrs) -}}
+{{- fail "monitoring.prometheus.vpnAccess.sourceCidrs must contain at least one VPN CIDR when VPN access is enabled" -}}
+{{- end -}}
 {{- $prometheusName := printf "%s-prometheus" (include "flow.fullname" .) -}}
 {{- $clusterRoleName := printf "%s-%s" $prometheusName .Release.Namespace | trunc 63 | trimSuffix "-" -}}
 {{- $relayPorts := add1 (sub (int .Values.coturn.relayPortMax) (int .Values.coturn.relayPortMin)) -}}
@@ -102,6 +105,24 @@ data:
             target_label: __metrics_path__
             replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
 
+      {{- if $prometheus.heteronetwork.enabled }}
+      - job_name: heteronetwork-agents
+        metrics_path: /metrics
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_node_address_InternalIP]
+            action: keep
+            regex: .+
+          - source_labels: [__meta_kubernetes_node_address_InternalIP]
+            target_label: __address__
+            replacement: $1:{{ $prometheus.heteronetwork.agentMetricsPort }}
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: node
+          - source_labels: [__meta_kubernetes_node_address_InternalIP]
+            target_label: vpn_ip
+      {{- end }}
+
       - job_name: flow-livekit
         kubernetes_sd_configs:
           - role: pod
@@ -164,6 +185,18 @@ data:
             expr: sum by (node, interface) (rate(container_network_receive_bytes_total{job="kubernetes-nodes-cadvisor",id="/"}[5m]))
           - record: flow:node_network_transmit_bytes_per_second
             expr: sum by (node, interface) (rate(container_network_transmit_bytes_total{job="kubernetes-nodes-cadvisor",id="/"}[5m]))
+          {{- if $prometheus.heteronetwork.enabled }}
+          - record: heteronetwork:node_vpn_receive_bytes_per_second
+            expr: sum by (node) (rate(container_network_receive_bytes_total{job="kubernetes-nodes-cadvisor",id="/",interface={{ $prometheus.heteronetwork.interface | quote }}}[5m]))
+          - record: heteronetwork:node_vpn_transmit_bytes_per_second
+            expr: sum by (node) (rate(container_network_transmit_bytes_total{job="kubernetes-nodes-cadvisor",id="/",interface={{ $prometheus.heteronetwork.interface | quote }}}[5m]))
+          - record: heteronetwork:active_peers:sum
+            expr: sum(ipars_agent_active_peers{job="heteronetwork-agents"})
+          - record: heteronetwork:pinned_peers:sum
+            expr: sum(ipars_agent_pinned_peers{job="heteronetwork-agents"})
+          - record: heteronetwork:relay_sessions:sum
+            expr: sum(ipars_agent_relay_sessions{job="heteronetwork-agents"})
+          {{- end }}
           - alert: FlowTurnAllocationCapacityHigh
             expr: flow:turn_allocation_utilization:ratio > 0.8
             for: 2m
@@ -192,6 +225,15 @@ data:
               severity: warning
             annotations:
               summary: Kubernetes node memory working set is above 85 percent
+          {{- if $prometheus.heteronetwork.enabled }}
+          - alert: HeteroNetworkAgentMetricsMissing
+            expr: absent(up{job="heteronetwork-agents"}) or min(up{job="heteronetwork-agents"}) < 1
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: At least one HeteroNetwork Agent metrics endpoint is unavailable
+          {{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -216,6 +258,10 @@ spec:
       annotations:
         checksum/config: {{ printf "%s-%s" (toJson $prometheus) .Chart.Version | sha256sum }}
     spec:
+      {{- if $prometheus.vpnAccess.enabled }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
       serviceAccountName: {{ $prometheusName }}
       automountServiceAccountToken: true
       securityContext:
@@ -249,13 +295,24 @@ spec:
         - name: prometheus
           image: {{ include "flow.imageRef" $prometheus.image }}
           imagePullPolicy: {{ $prometheus.image.pullPolicy }}
+          {{- if $prometheus.vpnAccess.enabled }}
+          env:
+            - name: PROMETHEUS_LISTEN_ADDRESS
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          {{- end }}
           args:
             - --config.file=/etc/prometheus/prometheus.yml
             - --storage.tsdb.path=/prometheus
             - --storage.tsdb.retention.time={{ $prometheus.retentionTime }}
             - --storage.tsdb.retention.size={{ $prometheus.retentionSize }}
             - --storage.tsdb.wal-compression
+            {{- if $prometheus.vpnAccess.enabled }}
+            - --web.listen-address=$(PROMETHEUS_LISTEN_ADDRESS):{{ $prometheus.service.port }}
+            {{- else }}
             - --web.listen-address=0.0.0.0:{{ $prometheus.service.port }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ $prometheus.service.port }}

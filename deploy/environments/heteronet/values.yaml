@@ -118,6 +118,14 @@ coturn:
 monitoring:
   prometheus:
     enabled: true
+    vpnAccess:
+      enabled: true
+      sourceCidrs:
+        - 10.250.0.0/16
+    heteronetwork:
+      enabled: true
+      agentMetricsPort: 9781
+      interface: heteronetwork0
     storage:
       type: hostPath
       hostPath: /var/lib/heterocloud-flow/prometheus

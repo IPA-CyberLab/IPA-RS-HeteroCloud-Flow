@@ -295,6 +295,8 @@
             "retentionSize",
             "externalLabels",
             "service",
+            "vpnAccess",
+            "heteronetwork",
             "storage",
             "nodeSelector",
             "tolerations",
@@ -331,6 +333,36 @@
               "required": ["port"],
               "properties": {
                 "port": {"type": "integer", "minimum": 1024, "maximum": 65535}
+              }
+            },
+            "vpnAccess": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled", "sourceCidrs"],
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "sourceCidrs": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {"type": "string", "minLength": 3, "maxLength": 49}
+                }
+              }
+            },
+            "heteronetwork": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled", "agentMetricsPort", "interface"],
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "agentMetricsPort": {
+                  "type": "integer",
+                  "minimum": 1024,
+                  "maximum": 65535
+                },
+                "interface": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_.-]{1,15}$"
+                }
               }
             },
             "storage": {

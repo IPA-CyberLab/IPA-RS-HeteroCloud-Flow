@@ -236,6 +236,13 @@ monitoring:
       cluster: heterocloud-flow
     service:
       port: 9090
+    vpnAccess:
+      enabled: false
+      sourceCidrs: []
+    heteronetwork:
+      enabled: false
+      agentMetricsPort: 9781
+      interface: heteronetwork0
     storage:
       type: emptyDir
       emptyDir:
