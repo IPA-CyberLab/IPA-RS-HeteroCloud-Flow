@@ -23,6 +23,7 @@ grep -q 'job_name: heteronetwork-agents' "$work_dir/rendered.yaml"
 grep -q 'record: heteronetwork:node_vpn_receive_bytes_per_second' "$work_dir/rendered.yaml"
 grep -q 'hostNetwork: true' "$work_dir/rendered.yaml"
 grep -q -- '--web.listen-address=$(PROMETHEUS_LISTEN_ADDRESS):9090' "$work_dir/rendered.yaml"
+grep -q 'heterocloud-flow-prometheus.heterocloud-flow.svc:9090' "$work_dir/rendered.yaml"
 
 awk '
   /^  prometheus.yml: \|$/ { emit = 1; next }

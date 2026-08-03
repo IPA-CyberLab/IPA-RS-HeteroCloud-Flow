@@ -67,7 +67,8 @@ data:
     scrape_configs:
       - job_name: prometheus
         static_configs:
-          - targets: [127.0.0.1:{{ $prometheus.service.port }}]
+          - targets:
+              - {{ $prometheusName }}.{{ .Release.Namespace }}.svc:{{ $prometheus.service.port }}
 
       - job_name: kubernetes-nodes-resource
         scheme: https
