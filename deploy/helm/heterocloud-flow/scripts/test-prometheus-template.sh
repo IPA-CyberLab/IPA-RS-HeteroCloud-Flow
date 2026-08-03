@@ -32,6 +32,10 @@ grep -q 'loadBalancerClass: "heteronetwork.io/public"' "$work_dir/rendered.yaml"
 grep -q 'networking.heteronetwork.io/traffic-mode: "forwarded"' "$work_dir/rendered.yaml"
 grep -q 'networking.heteronetwork.io/ingress-replicas: "3"' "$work_dir/rendered.yaml"
 grep -q '10.250.0.0/16' "$work_dir/rendered.yaml"
+grep -q 'job_name: kubernetes-services-annotated' "$work_dir/rendered.yaml"
+grep -q -- '- argocd' "$work_dir/rendered.yaml"
+grep -q -- '- endpoints' "$work_dir/rendered.yaml"
+grep -q -- '- services' "$work_dir/rendered.yaml"
 
 awk '
   /^  prometheus.yml: \|$/ { emit = 1; next }

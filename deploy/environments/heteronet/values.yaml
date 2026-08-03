@@ -134,6 +134,8 @@ monitoring:
       enabled: true
       agentMetricsPort: 9781
       interface: heteronetwork0
+    additionalScrapeNamespaces:
+      - argocd
     storage:
       type: hostPath
       hostPath: /var/lib/heterocloud-flow/prometheus

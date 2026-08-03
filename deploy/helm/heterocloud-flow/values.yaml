@@ -235,6 +235,7 @@ monitoring:
     retentionSize: 10GB
     externalLabels:
       cluster: heterocloud-flow
+    additionalScrapeNamespaces: []
     service:
       port: 9090
       type: ClusterIP

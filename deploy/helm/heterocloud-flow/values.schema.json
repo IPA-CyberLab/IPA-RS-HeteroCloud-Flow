@@ -295,6 +295,7 @@
             "retentionTime",
             "retentionSize",
             "externalLabels",
+            "additionalScrapeNamespaces",
             "service",
             "vpnAccess",
             "heteronetwork",
@@ -329,6 +330,15 @@
               "type": "object",
               "minProperties": 1,
               "additionalProperties": {"type": "string", "minLength": 1}
+            },
+            "additionalScrapeNamespaces": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                "maxLength": 63
+              }
             },
             "service": {
               "type": "object",

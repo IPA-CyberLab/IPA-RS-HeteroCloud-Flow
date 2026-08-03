@@ -57,6 +57,8 @@ rules:
       - nodes/metrics
       - nodes/proxy
       - pods
+      - endpoints
+      - services
     verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -133,6 +135,36 @@ data:
             target_label: node
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: pod
+      {{- end }}
+
+      {{- if $prometheus.additionalScrapeNamespaces }}
+      - job_name: kubernetes-services-annotated
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                {{- toYaml $prometheus.additionalScrapeNamespaces | nindent 16 }}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: (http-)?metrics
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scheme]
+            action: replace
+            target_label: __scheme__
+            regex: (https?)
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            target_label: service
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
       {{- end }}
 
       - job_name: kubernetes-nodes-resource
