@@ -21,16 +21,13 @@
 {{- if empty $grafana.service.loadBalancerClass -}}
 {{- fail "monitoring.grafana.service.loadBalancerClass is required for LoadBalancer" -}}
 {{- end -}}
-{{- if ne $grafana.service.trafficMode "forwarded" -}}
-{{- fail "monitoring.grafana.service.trafficMode must be forwarded for LoadBalancer" -}}
-{{- end -}}
 {{- if or (lt (int $grafana.service.ingressReplicas) 1) (gt (int $grafana.service.ingressReplicas) 64) -}}
 {{- fail "monitoring.grafana.service.ingressReplicas must be between 1 and 64" -}}
 {{- end -}}
 {{- if empty $grafana.service.loadBalancerSourceRanges -}}
 {{- fail "monitoring.grafana.service.loadBalancerSourceRanges must restrict LoadBalancer access" -}}
 {{- end -}}
-{{- else if or (not (empty $grafana.service.loadBalancerClass)) (not (empty $grafana.service.trafficMode)) -}}
+{{- else if not (empty $grafana.service.loadBalancerClass) -}}
 {{- fail "monitoring.grafana.service LoadBalancer settings require type LoadBalancer" -}}
 {{- end -}}
 {{- if and $grafana.podDisruptionBudget.enabled (gt (int $grafana.podDisruptionBudget.minAvailable) $replicaCount) -}}
@@ -522,7 +519,7 @@ metadata:
     app.kubernetes.io/component: grafana
   {{- if eq $serviceType "LoadBalancer" }}
   annotations:
-    networking.heteronetwork.io/traffic-mode: {{ $grafana.service.trafficMode | quote }}
+    networking.heteronetwork.io/traffic-mode: "forwarded"
     networking.heteronetwork.io/ingress-replicas: {{ $grafana.service.ingressReplicas | quote }}
   {{- end }}
 spec:

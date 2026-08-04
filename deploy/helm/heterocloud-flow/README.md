@@ -5,7 +5,7 @@
 - Kubernetes 1.29 or newer on at least three nodes
 - HeteroNetwork controller with `heteronetwork.io/public`
   `loadBalancerClass`
-- At least three eligible public-ingress nodes for direct RTC/TURN
+- At least three eligible public-ingress nodes for direct TURN
 - External PostgreSQL 15+ HA, or `postgresql-ha.enabled=true`
 - Per-node managed HeteroNetwork Caddy for browser-facing HTTPS/WSS
 
@@ -117,8 +117,12 @@ HeteroCloud and Keycloak.
 | `*-api-public` (optional) | `forwarded` | `Cluster` | Plain HTTP API behind a trusted TLS tier |
 | `*-signaling-public` (optional) | `forwarded` | `Cluster` | Flow P2P WebSocket behind a trusted TLS tier |
 | `*-livekit-signal-public` (optional) | `forwarded` | `Cluster` | LiveKit API/WebSocket behind a trusted TLS tier |
-| `*-livekit-rtc` | `direct` | `Local` | LiveKit TCP/UDP media |
+| `*-livekit-rtc` | `forwarded` | `Cluster` | LiveKit TCP/UDP media through redundant public ingress |
 | `*-turn` | `direct` | `Local` | coturn UDP/TCP listener |
+
+These modes are fixed by the chart. Only coturn is scheduled as a direct
+workload; API, signaling, LiveKit, Prometheus, and Grafana use forwarded public
+Services. Supplying the traffic-mode annotation through values is rejected.
 
 The internal API, signaling, and LiveKit signal ClusterIPs always remain
 available. Enable `api.publicService`, `signaling.publicService`, or

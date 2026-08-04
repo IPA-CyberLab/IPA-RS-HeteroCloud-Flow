@@ -347,7 +347,6 @@
                 "port",
                 "type",
                 "loadBalancerClass",
-                "trafficMode",
                 "ingressReplicas",
                 "loadBalancerSourceRanges"
               ],
@@ -355,7 +354,6 @@
                 "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
                 "type": {"type": "string", "enum": ["ClusterIP", "LoadBalancer"]},
                 "loadBalancerClass": {"type": "string", "maxLength": 253},
-                "trafficMode": {"type": "string", "enum": ["", "forwarded"]},
                 "ingressReplicas": {"type": "integer", "minimum": 1, "maximum": 64},
                 "loadBalancerSourceRanges": {
                   "type": "array",
@@ -477,7 +475,6 @@
                 "port",
                 "type",
                 "loadBalancerClass",
-                "trafficMode",
                 "ingressReplicas",
                 "loadBalancerSourceRanges"
               ],
@@ -485,7 +482,6 @@
                 "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
                 "type": {"type": "string", "enum": ["ClusterIP", "LoadBalancer"]},
                 "loadBalancerClass": {"type": "string", "maxLength": 253},
-                "trafficMode": {"type": "string", "enum": ["", "forwarded"]},
                 "ingressReplicas": {"type": "integer", "minimum": 1, "maximum": 64},
                 "loadBalancerSourceRanges": {
                   "type": "array",

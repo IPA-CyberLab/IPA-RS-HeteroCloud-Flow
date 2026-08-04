@@ -64,8 +64,7 @@ api:
   publicService:
     enabled: false
     port: 8080
-    annotations:
-      networking.heteronetwork.io/traffic-mode: forwarded
+    annotations: {}
   resources:
     requests:
       cpu: 100m
@@ -99,8 +98,7 @@ signaling:
   publicService:
     enabled: false
     port: 8082
-    annotations:
-      networking.heteronetwork.io/traffic-mode: forwarded
+    annotations: {}
   resources:
     requests:
       cpu: 200m
@@ -129,13 +127,11 @@ livekit:
     publicService:
       enabled: false
       port: 7880
-      annotations:
-        networking.heteronetwork.io/traffic-mode: forwarded
+      annotations: {}
   rtc:
     tcpPort: 7881
     udpPort: 7882
-    annotations:
-      networking.heteronetwork.io/traffic-mode: direct
+    annotations: {}
   resources:
     requests:
       cpu: "2"
@@ -168,8 +164,7 @@ coturn:
   metrics:
     port: 9641
     urls: []
-  annotations:
-    networking.heteronetwork.io/traffic-mode: direct
+  annotations: {}
   resources:
     requests:
       cpu: 200m
@@ -240,7 +235,6 @@ monitoring:
       port: 9090
       type: ClusterIP
       loadBalancerClass: ""
-      trafficMode: ""
       ingressReplicas: 1
       loadBalancerSourceRanges: []
     vpnAccess:
@@ -287,7 +281,6 @@ monitoring:
       port: 3000
       type: ClusterIP
       loadBalancerClass: ""
-      trafficMode: ""
       ingressReplicas: 1
       loadBalancerSourceRanges: []
     vpnAccess:

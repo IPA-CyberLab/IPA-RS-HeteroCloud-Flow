@@ -15,16 +15,13 @@
 {{- if empty $prometheus.service.loadBalancerClass -}}
 {{- fail "monitoring.prometheus.service.loadBalancerClass is required for LoadBalancer" -}}
 {{- end -}}
-{{- if ne $prometheus.service.trafficMode "forwarded" -}}
-{{- fail "monitoring.prometheus.service.trafficMode must be forwarded for LoadBalancer" -}}
-{{- end -}}
 {{- if or (lt (int $prometheus.service.ingressReplicas) 1) (gt (int $prometheus.service.ingressReplicas) 64) -}}
 {{- fail "monitoring.prometheus.service.ingressReplicas must be between 1 and 64" -}}
 {{- end -}}
 {{- if empty $prometheus.service.loadBalancerSourceRanges -}}
 {{- fail "monitoring.prometheus.service.loadBalancerSourceRanges must restrict LoadBalancer access" -}}
 {{- end -}}
-{{- else if or (not (empty $prometheus.service.loadBalancerClass)) (not (empty $prometheus.service.trafficMode)) -}}
+{{- else if not (empty $prometheus.service.loadBalancerClass) -}}
 {{- fail "monitoring.prometheus.service LoadBalancer settings require type LoadBalancer" -}}
 {{- end -}}
 {{- if and $prometheus.podDisruptionBudget.enabled (gt (int $prometheus.podDisruptionBudget.minAvailable) $replicaCount) -}}
@@ -528,7 +525,7 @@ metadata:
     app.kubernetes.io/component: prometheus
   {{- if eq $serviceType "LoadBalancer" }}
   annotations:
-    networking.heteronetwork.io/traffic-mode: {{ $prometheus.service.trafficMode | quote }}
+    networking.heteronetwork.io/traffic-mode: "forwarded"
     networking.heteronetwork.io/ingress-replicas: {{ $prometheus.service.ingressReplicas | quote }}
   {{- end }}
 spec:

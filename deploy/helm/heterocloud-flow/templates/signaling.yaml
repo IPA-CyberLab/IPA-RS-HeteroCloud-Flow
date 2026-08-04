@@ -1,3 +1,4 @@
+{{- include "flow.rejectTrafficModeAnnotation" (dict "annotations" .Values.signaling.publicService.annotations "path" "signaling.publicService.annotations") -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -172,7 +173,10 @@ metadata:
     {{- include "flow.labels" . | nindent 4 }}
     app.kubernetes.io/component: signaling
   annotations:
-    {{- toYaml .Values.signaling.publicService.annotations | nindent 4 }}
+    networking.heteronetwork.io/traffic-mode: "forwarded"
+    {{- with .Values.signaling.publicService.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   type: LoadBalancer
   loadBalancerClass: heteronetwork.io/public

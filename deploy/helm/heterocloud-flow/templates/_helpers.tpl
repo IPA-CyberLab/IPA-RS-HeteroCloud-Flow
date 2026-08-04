@@ -115,3 +115,10 @@ podAntiAffinity:
 {{- end -}}
 {{- join "," $urls -}}
 {{- end }}
+
+{{- define "flow.rejectTrafficModeAnnotation" -}}
+{{- $annotations := .annotations | default dict -}}
+{{- if hasKey $annotations "networking.heteronetwork.io/traffic-mode" -}}
+{{- fail (printf "%s must not set networking.heteronetwork.io/traffic-mode; Flow fixes this policy by component" .path) -}}
+{{- end -}}
+{{- end }}

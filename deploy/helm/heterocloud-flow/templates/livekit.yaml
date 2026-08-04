@@ -1,3 +1,5 @@
+{{- include "flow.rejectTrafficModeAnnotation" (dict "annotations" .Values.livekit.signal.publicService.annotations "path" "livekit.signal.publicService.annotations") -}}
+{{- include "flow.rejectTrafficModeAnnotation" (dict "annotations" .Values.livekit.rtc.annotations "path" "livekit.rtc.annotations") -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -21,7 +23,6 @@ spec:
       labels:
         {{- include "flow.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: livekit
-        networking.heteronetwork.io/traffic-mode: direct
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/livekit-config.yaml") . | sha256sum }}
         {{- with .Values.podAnnotations }}
@@ -209,7 +210,10 @@ metadata:
     {{- include "flow.labels" . | nindent 4 }}
     app.kubernetes.io/component: livekit
   annotations:
-    {{- toYaml .Values.livekit.signal.publicService.annotations | nindent 4 }}
+    networking.heteronetwork.io/traffic-mode: "forwarded"
+    {{- with .Values.livekit.signal.publicService.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   type: LoadBalancer
   loadBalancerClass: heteronetwork.io/public
@@ -234,12 +238,15 @@ metadata:
     {{- include "flow.labels" . | nindent 4 }}
     app.kubernetes.io/component: livekit
   annotations:
-    {{- toYaml .Values.livekit.rtc.annotations | nindent 4 }}
+    networking.heteronetwork.io/traffic-mode: "forwarded"
+    {{- with .Values.livekit.rtc.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   type: LoadBalancer
   loadBalancerClass: heteronetwork.io/public
   allocateLoadBalancerNodePorts: false
-  externalTrafficPolicy: Local
+  externalTrafficPolicy: Cluster
   selector:
     {{- include "flow.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: livekit

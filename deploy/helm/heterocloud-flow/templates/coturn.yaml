@@ -1,3 +1,4 @@
+{{- include "flow.rejectTrafficModeAnnotation" (dict "annotations" .Values.coturn.annotations "path" "coturn.annotations") -}}
 {{- $relayAddressMode := .Values.coturn.relayAddress.mode -}}
 {{- $relayAddressMappings := .Values.coturn.relayAddress.mappings -}}
 {{- $relayAddressMappingArgs := list -}}
@@ -248,7 +249,10 @@ metadata:
     {{- include "flow.labels" . | nindent 4 }}
     app.kubernetes.io/component: coturn
   annotations:
-    {{- toYaml .Values.coturn.annotations | nindent 4 }}
+    networking.heteronetwork.io/traffic-mode: "direct"
+    {{- with .Values.coturn.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   type: LoadBalancer
   loadBalancerClass: heteronetwork.io/public
