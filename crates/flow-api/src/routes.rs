@@ -25,7 +25,7 @@ use flow_domain::{
 use flow_livekit::LiveKitClient;
 use flow_rate_limit::{IpRateLimiter, RateLimitDecision, RateLimitPolicy, TrustedProxies};
 use flow_store::PgStore;
-use flow_turn::{TurnCredentialIssuer, TurnCredentials};
+use flow_turn::{IceConfiguration, IceServer, TurnCredentialIssuer, TurnCredentials};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tower_http::trace::TraceLayer;
@@ -886,6 +886,10 @@ async fn get_room(
 }
 
 /// Issue mode-specific short-lived connection data for a room.
+///
+/// The returned ICE server list is fixed to normal WebRTC candidate selection:
+/// clients try host and STUN-derived candidates and use TURN when direct
+/// connectivity checks fail. Flow does not expose a relay-only mode.
 #[utoipa::path(
     post,
     path = "/v1/rooms/{room_id}/join",
@@ -894,7 +898,7 @@ async fn get_room(
     params(("room_id" = Uuid, Path, description = "Room ID")),
     request_body = JoinRoomRequest,
     responses(
-        (status = 200, description = "P2P signaling or SFU connection data", body = JoinRoomResponse),
+        (status = 200, description = "P2P signaling or SFU connection data with direct-first ICE servers and automatic TURN fallback", body = JoinRoomResponse),
         (status = 400, description = "Join request is invalid", body = ErrorEnvelope),
         (status = 401, description = "Signed access context is missing, invalid, or nearly expired", body = ErrorEnvelope),
         (status = 403, description = "The context lacks flow.room.join", body = ErrorEnvelope),
@@ -943,16 +947,16 @@ async fn join_room(
     );
     // LiveKit and coturn cannot retract issued credentials through this API.
     // Bound both credentials to the delegated context's remaining lifetime.
-    let turn = state
+    let ice = state
         .turn
-        .issue_with_ttl(&identity, remaining)
+        .issue_ice_with_ttl(&identity, remaining)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let connection = match room.mode {
         SessionMode::P2p => RoomConnection::P2p {
             protocol: SIGNALING_PROTOCOL_ID.into(),
             asyncapi_urls: signaling_asyncapi::documentation_urls(&state.api_urls),
             urls: signaling_room_urls(&state.signaling_urls, room.id),
-            turn,
+            ice,
         },
         SessionMode::Sfu => {
             let ttl = participant_token_ttl(state.participant_token_ttl, remaining);
@@ -970,7 +974,7 @@ async fn join_room(
             RoomConnection::Sfu {
                 urls: state.livekit_ws_urls.clone(),
                 token,
-                turn,
+                ice,
             }
         }
     };
@@ -1003,13 +1007,16 @@ async fn join_room(
 }
 
 /// Issue short-lived TURN REST credentials for the signed principal.
+///
+/// Credentials make relay candidates available to normal ICE negotiation;
+/// issuing them does not select or force relay-only transport.
 #[utoipa::path(
     post,
     path = "/v1/turn-credentials",
     tag = "Connectivity",
     security(("flow_principal" = [], "flow_timestamp" = [], "flow_signature" = [])),
     responses(
-        (status = 200, description = "TURN URLs and short-lived credentials", body = TurnCredentials),
+        (status = 200, description = "Optional TURN fallback URLs and short-lived credentials; this response does not force relay transport", body = TurnCredentials),
         (status = 400, description = "Credential request is invalid", body = ErrorEnvelope),
         (status = 401, description = "Signed access context is missing, invalid, or nearly expired", body = ErrorEnvelope),
         (status = 403, description = "The context lacks flow.turn.issue", body = ErrorEnvelope),
@@ -1292,12 +1299,12 @@ enum RoomConnection {
         protocol: String,
         asyncapi_urls: Vec<String>,
         urls: Vec<String>,
-        turn: TurnCredentials,
+        ice: IceConfiguration,
     },
     Sfu {
         urls: Vec<String>,
         token: String,
-        turn: TurnCredentials,
+        ice: IceConfiguration,
     },
 }
 
@@ -1306,7 +1313,7 @@ enum RoomConnection {
     info(
         title = "HeteroCloud Flow Public API",
         version = env!("CARGO_PKG_VERSION"),
-        description = "Public room, matchmaking, participant connection, and TURN credential API. Obtain the three short-lived X-Flow-* header values from HeteroCloud and send all three on every REST request. P2P join responses identify flow-signaling.v1 and link the complete AsyncAPI WebSocket frame contract. Every request is subject to a system source-IP ceiling; authenticated requests also share the Flow service's console-configured source-IP token bucket across all API replicas. Ready rooms are removed after ten minutes without P2P or SFU participants."
+        description = "Public room, matchmaking, participant connection, and TURN credential API. Obtain the three short-lived X-Flow-* header values from HeteroCloud and send all three on every REST request. P2P join responses identify flow-signaling.v1, link the complete AsyncAPI WebSocket frame contract, and return STUN plus authenticated TURN as a direct-first ICE server list. Clients use normal WebRTC candidate selection; TURN is selected automatically only when direct connectivity checks fail. Relay-only selection is not part of the Flow API. Every request is subject to a system source-IP ceiling; authenticated requests also share the Flow service's console-configured source-IP token bucket across all API replicas. Ready rooms are removed after ten minutes without P2P or SFU participants."
     ),
     paths(
         service_overview,
@@ -1340,6 +1347,8 @@ enum RoomConnection {
         MatchAssignment,
         FlowRoom,
         SessionMode,
+        IceConfiguration,
+        IceServer,
         TurnCredentials,
         RoomListResponse,
         TicketListResponse
@@ -1348,7 +1357,7 @@ enum RoomConnection {
         (name = "Overview", description = "Service capacity and endpoint discovery"),
         (name = "Matchmaking", description = "Queue and ticket operations"),
         (name = "Rooms", description = "P2P and SFU room lifecycle"),
-        (name = "Connectivity", description = "Short-lived participant and TURN connection data")
+        (name = "Connectivity", description = "Direct-first ICE, signaling, participant, and TURN fallback data")
     ),
     modifiers(&FlowSecurity)
 )]
@@ -1532,13 +1541,13 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
                 "wss://flow-b.example.test/v1/signal/room".into(),
                 "wss://flow-c.example.test/v1/signal/room".into(),
             ],
-            turn: TurnCredentialIssuer::new(
+            ice: TurnCredentialIssuer::new(
                 vec!["turn:turn-a.example.test:3478?transport=udp".into()],
                 b"route-test-turn-secret-at-least-32-bytes".to_vec(),
                 Duration::from_mins(5),
             )
             .unwrap()
-            .issue("principal")
+            .issue_ice("principal")
             .unwrap(),
         };
 
@@ -1554,6 +1563,16 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
             rendered["urls"][2],
             "wss://flow-c.example.test/v1/signal/room"
         );
+        assert_eq!(
+            rendered["ice"]["ice_servers"][0]["urls"][0],
+            "stun:turn-a.example.test:3478"
+        );
+        assert_eq!(
+            rendered["ice"]["ice_servers"][1]["urls"][0],
+            "turn:turn-a.example.test:3478?transport=udp"
+        );
+        assert!(rendered["ice"]["ice_servers"][1]["credential"].is_string());
+        assert!(rendered.get("turn").is_none());
         assert!(rendered.get("signaling_url").is_none());
     }
 
@@ -1634,6 +1653,14 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
                 .get("SignalingServerFrame")
                 .is_some()
         );
+        assert!(
+            value["components"]["schemas"]
+                .get("IceConfiguration")
+                .is_some()
+        );
+        assert!(value["components"]["schemas"].get("IceServer").is_some());
+        assert!(!value.to_string().contains("relay_only"));
+        assert!(!value.to_string().contains("force_turn"));
         assert_eq!(
             value["paths"]["/v1/rooms"]["post"]["security"][0]
                 .as_object()

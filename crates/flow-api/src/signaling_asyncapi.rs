@@ -36,7 +36,7 @@ pub fn document(signaling_urls: &[String]) -> Value {
         "info": {
             "title": "HeteroCloud Flow P2P Signaling API",
             "version": env!("CARGO_PKG_VERSION"),
-            "description": "Client-facing WebSocket contract for Flow P2P rooms. Connect to a URL returned by POST /v1/rooms/{room_id}/join. The first text frame must be signed_context and uses the three X-Flow-* values unchanged. Wait for authenticated before sending targeted signaling frames. Payload objects are transported without interpretation so both peers must use the same SDP/ICE representation."
+            "description": "Client-facing WebSocket contract for Flow P2P rooms. Connect to a URL returned by POST /v1/rooms/{room_id}/join and pass connection.ice.ice_servers to RTCPeerConnection as iceServers. Do not force relay-only transport: normal ICE checks direct host and STUN-derived candidates first and selects the provided TURN candidates when direct connectivity fails. The first text frame must be signed_context and uses the three X-Flow-* values unchanged. Wait for authenticated before sending targeted signaling frames. Payload objects are transported without interpretation so both peers must use the same SDP/ICE representation."
         },
         "defaultContentType": "application/json",
         "servers": servers,
@@ -316,6 +316,11 @@ mod tests {
             document["components"]["schemas"]["AuthenticationFrame"]["properties"]["principal_context"]
                 ["description"],
             "Exact X-Flow-Principal value from the issued access context"
+        );
+        assert!(
+            document["info"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("normal ICE"))
         );
         assert!(
             document["components"]["schemas"]["ServerFrame"]["oneOf"]

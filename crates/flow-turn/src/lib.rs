@@ -60,6 +60,19 @@ impl TurnCredentialIssuer {
         self.issue_with_ttl(identity, self.ttl)
     }
 
+    /// Issues a browser-compatible ICE server list using the configured lifetime.
+    ///
+    /// The list contains unauthenticated STUN discovery first and authenticated
+    /// TURN candidates second. With the WebRTC default transport policy, direct
+    /// candidates are preferred and TURN remains available as automatic fallback.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TurnError::InvalidIdentity`] for an empty or oversized identity.
+    pub fn issue_ice(&self, identity: &str) -> Result<IceConfiguration, TurnError> {
+        self.issue_ice_with_ttl(identity, self.ttl)
+    }
+
     #[must_use]
     pub fn urls(&self) -> &[String] {
         &self.urls
@@ -118,6 +131,54 @@ impl TurnCredentialIssuer {
             expires_at,
         })
     }
+
+    /// Issues a browser-compatible ICE server list capped by the delegated lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TurnError`] when the identity or effective lifetime is invalid.
+    pub fn issue_ice_with_ttl(
+        &self,
+        identity: &str,
+        maximum_ttl: Duration,
+    ) -> Result<IceConfiguration, TurnError> {
+        let turn = self.issue_with_ttl(identity, maximum_ttl)?;
+        Ok(IceConfiguration {
+            ice_servers: vec![
+                IceServer {
+                    urls: self.stun_urls(),
+                    username: None,
+                    credential: None,
+                },
+                IceServer {
+                    urls: turn.urls,
+                    username: Some(turn.username),
+                    credential: Some(turn.password),
+                },
+            ],
+            expires_at: turn.expires_at,
+        })
+    }
+}
+
+/// WebRTC `RTCIceServer` values for direct ICE with TURN fallback.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct IceConfiguration {
+    /// Pass this array to `RTCPeerConnection` as `iceServers` without setting
+    /// `iceTransportPolicy` to `relay`.
+    pub ice_servers: Vec<IceServer>,
+    /// Expiration of the TURN credentials contained in the server list.
+    pub expires_at: DateTime<Utc>,
+}
+
+/// One browser-compatible `RTCIceServer` entry.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct IceServer {
+    pub urls: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -200,5 +261,30 @@ mod tests {
 
         assert!(credentials.expires_at >= before + chrono::Duration::seconds(17));
         assert!(credentials.expires_at <= after + chrono::Duration::seconds(17));
+    }
+
+    #[test]
+    fn issues_stun_first_with_authenticated_turn_fallback() {
+        let issuer = TurnCredentialIssuer::new(
+            vec![
+                "turn:turn.example.test:3478?transport=udp".into(),
+                "turn:turn.example.test:3478?transport=tcp".into(),
+            ],
+            b"turn-secret-with-at-least-thirty-two-bytes",
+            Duration::from_mins(5),
+        )
+        .unwrap();
+
+        let configuration = issuer.issue_ice("principal-a").unwrap();
+        assert_eq!(configuration.ice_servers.len(), 2);
+        assert_eq!(
+            configuration.ice_servers[0].urls,
+            ["stun:turn.example.test:3478"]
+        );
+        assert!(configuration.ice_servers[0].username.is_none());
+        assert!(configuration.ice_servers[0].credential.is_none());
+        assert_eq!(configuration.ice_servers[1].urls, issuer.urls());
+        assert!(configuration.ice_servers[1].username.is_some());
+        assert!(configuration.ice_servers[1].credential.is_some());
     }
 }

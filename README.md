@@ -153,11 +153,27 @@ limited by their socket peer address.
 `p2p` join responses identify `flow-signaling.v1`, link every HA AsyncAPI
 document, and contain an ordered `connection.urls` array of WSS Flow signaling
 URLs with `/v1/signal/{room_id}` appended to every origin. `sfu` responses
-contain an ordered array of public LiveKit WSS URLs, a short-lived participant
-JWT, and TURN credentials. In both cases clients try the first URL as primary
-and the remaining URLs in order after connection failure. TURN credentials
-contain every configured UDP/TCP endpoint. LiveKit keys and TURN secrets are
-shared by replicas, but neither secret is ever returned.
+contain an ordered array of public LiveKit WSS URLs and a short-lived
+participant JWT. Both response types include `connection.ice.ice_servers`: an
+unauthenticated STUN entry followed by an authenticated TURN entry containing
+every configured UDP/TCP endpoint. Clients try the first signaling URL as
+primary and the remaining URLs in order after connection failure. LiveKit keys
+and TURN secrets are shared by replicas, but neither secret is ever returned.
+
+Flow has no relay-only connection mode. For P2P, pass the returned entries to
+`RTCPeerConnection` as `iceServers` and leave `iceTransportPolicy` at its
+WebRTC default (`all`). ICE considers direct host and STUN-derived candidates
+before selecting a TURN relay when direct connectivity checks fail:
+
+```js
+const peer = new RTCPeerConnection({
+  iceServers: join.connection.ice.ice_servers,
+});
+```
+
+Do not set `iceTransportPolicy: "relay"`. For SFU rooms the LiveKit signaling
+response applies the same STUN/TURN set and performs its own direct-to-relay
+fallback.
 
 Room capacity has two independent bounds. The service spec's `max_rooms`
 controls total concurrent rooms for the service, while the system always caps
@@ -282,6 +298,11 @@ NetworkPolicies. It also deploys three LiveKit replicas and three coturn
 replicas across the control-plane nodes. Only coturn carries HeteroNetwork's
 direct-placement label; LiveKit and the HTTP/WebSocket services use forwarded
 ingress.
+
+LiveKit advertises STUN-discovered external candidates and explicitly enables
+TCP/TURN fallback. Its clients therefore use a directly reachable UDP/TCP path
+when one succeeds and automatically fall back to the direct coturn deployment
+when NAT or firewall connectivity checks fail.
 
 `coturn.relayAddress.mode` explicitly separates local public-address binding
 from 1:1 NAT mapping. The HeteroNetwork overlay uses `direct-public`: the VPN
