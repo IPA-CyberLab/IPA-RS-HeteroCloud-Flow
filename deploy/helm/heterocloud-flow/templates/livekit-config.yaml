@@ -27,7 +27,7 @@ data:
     rtc:
       tcp_port: {{ .Values.livekit.rtc.tcpPort }}
       udp_port: {{ .Values.livekit.rtc.udpPort }}
-      use_external_ip: true
+      use_external_ip: false
       turn_servers:
       {{- $root := . }}
       {{- range $host := .Values.coturn.publicHosts }}

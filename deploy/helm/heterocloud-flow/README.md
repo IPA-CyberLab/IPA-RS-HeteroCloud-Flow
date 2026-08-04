@@ -123,6 +123,9 @@ HeteroCloud and Keycloak.
 These modes are fixed by the chart. Only coturn is scheduled as a direct
 workload; API, signaling, LiveKit, Prometheus, and Grafana use forwarded public
 Services. Supplying the traffic-mode annotation through values is rejected.
+LiveKit does not advertise a host public IP as an ICE candidate; public SFU
+media therefore reaches the selected LiveKit replica through the direct coturn
+relay instead of bypassing the fixed policy.
 
 The internal API, signaling, and LiveKit signal ClusterIPs always remain
 available. Enable `api.publicService`, `signaling.publicService`, or

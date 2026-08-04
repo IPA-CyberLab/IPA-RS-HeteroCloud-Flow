@@ -279,7 +279,9 @@ skip without failing unit tests.
 The Helm chart deploys each Rust service with three replicas, a disruption
 budget, required host spreading, probes, restricted security contexts, and
 NetworkPolicies. It also deploys three LiveKit replicas and three coturn
-replicas on HeteroNetwork public-ingress nodes.
+replicas across the control-plane nodes. Only coturn carries HeteroNetwork's
+direct-placement label; LiveKit and the HTTP/WebSocket services use forwarded
+ingress.
 
 `coturn.relayAddress.mode` explicitly separates local public-address binding
 from 1:1 NAT mapping. The HeteroNetwork overlay uses `direct-public`: the VPN
@@ -316,5 +318,5 @@ Actions.
   transparently when their serving pod or public gateway dies.
 - New P2P and SFU joins return three ordered WSS endpoints. Clients must fail
   over to an alternate URL when the primary endpoint cannot be reached.
-- HeteroNetwork direct mode requires at least three reachable public-IP-owning
-  nodes for the default replica count.
+- Coturn direct mode requires at least three reachable public-IP-owning nodes
+  for the default replica count.
