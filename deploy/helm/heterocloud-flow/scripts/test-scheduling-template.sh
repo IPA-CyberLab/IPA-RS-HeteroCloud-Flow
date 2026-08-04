@@ -25,7 +25,7 @@ test "$(grep -c '^  minAvailable: 3$' "$tmp_dir/pdb.yaml")" -eq 4
 test "$(grep -c '^  minAvailable: 2$' "$tmp_dir/pdb.yaml")" -eq 1
 
 helm template flow "$chart_dir" -f "$environment_values" >"$tmp_dir/all.yaml"
-test "$(grep -c '^  replicas: 5$' "$tmp_dir/all.yaml")" -eq 7
-grep -Eq 'sentinel monitor flowmaster .* 6379 3' "$tmp_dir/all.yaml"
+test "$(grep -c '^  replicas: 5$' "$tmp_dir/all.yaml")" -eq 6
+grep -Eq 'sentinel monitor flowmaster .* 6379 2' "$tmp_dir/all.yaml"
 
 printf 'Flow five-node scheduling tests passed\n'

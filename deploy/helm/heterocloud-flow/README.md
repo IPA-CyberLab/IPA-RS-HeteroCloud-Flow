@@ -91,8 +91,9 @@ overlay sets:
 - data-plane principal context `iss=heterocloud` and
   `aud=heterocloud-flow-data`; provider commands remain
   `aud=heterocloud-flow`
-- Redis primary plus four replicas and Sentinel quorum three, with persistence
-  disabled; this uses `emptyDir` and requires no `StorageClass`
+- Redis primary plus two replicas and Sentinel quorum two on the three always-on
+  control-plane nodes, with persistence disabled; this uses `emptyDir` and
+  requires no `StorageClass`
 - one stable HTTPS/WSS public endpoint while backend listeners remain HTTP
 - a Redis-backed deployment source-IP ceiling shared by API and signaling
   replicas, plus lower per-service buckets managed from HeteroCloud; forwarding
