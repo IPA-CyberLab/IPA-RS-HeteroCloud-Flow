@@ -65,6 +65,7 @@ api:
     enabled: false
     port: 8080
     annotations: {}
+    loadBalancerSourceRanges: []
   resources:
     requests:
       cpu: 100m
@@ -99,6 +100,7 @@ signaling:
     enabled: false
     port: 8082
     annotations: {}
+    loadBalancerSourceRanges: []
   resources:
     requests:
       cpu: 200m
@@ -128,6 +130,7 @@ livekit:
       enabled: false
       port: 7880
       annotations: {}
+      loadBalancerSourceRanges: []
   rtc:
     tcpPort: 7881
     udpPort: 7882
@@ -165,6 +168,7 @@ coturn:
     port: 9641
     urls: []
   annotations: {}
+  nodeSelector: {}
   resources:
     requests:
       cpu: 200m

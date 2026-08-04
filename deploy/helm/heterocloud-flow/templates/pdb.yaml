@@ -17,10 +17,9 @@ metadata:
     {{- include "flow.labels" $ | nindent 4 }}
     app.kubernetes.io/component: {{ $component.name }}
 spec:
-  minAvailable: 2
+  minAvailable: {{ div (add (int $component.replicas) 1) 2 }}
   selector:
     matchLabels:
       {{- include "flow.selectorLabels" $ | nindent 6 }}
       app.kubernetes.io/component: {{ $component.name }}
 {{- end }}
-

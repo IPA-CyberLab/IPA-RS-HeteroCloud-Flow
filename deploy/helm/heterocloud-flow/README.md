@@ -78,35 +78,34 @@ overlay sets:
 
 - `hostNetwork: true` and `ClusterFirstWithHostNet` for API, matchmaker, and
   signaling; LiveKit and coturn are host-network media pods as well
-- the top-level control-plane node selector for Flow API, matchmaker,
-  signaling, LiveKit, and coturn; the Redis subchart remains independently
-  distributed
+- five replicas of each forwarded workload, spread one per Kubernetes node;
+  coturn alone is selected onto the three `public-ingress=true` nodes
 - explicit coturn `direct-public` relay addressing; each VPN `status.hostIP`
   selects a public IPv4 address that is locally assigned on the same host, and
   coturn binds its relay socket directly to that public address
 - node-local PostgreSQL URL at `127.0.0.1:25432`
-- pools of API `8 x 3`, matchmaker `4 x 3`, signaling `6 x 3`: 54 steady-state
+- pools of API `6 x 5`, matchmaker `3 x 5`, signaling `4 x 5`: 65 steady-state
   maximum connections
 - API startup migrations enabled and the standalone migration Job disabled, so
   migration uses the same local proxy and API connection pools
 - data-plane principal context `iss=heterocloud` and
   `aud=heterocloud-flow-data`; provider commands remain
   `aud=heterocloud-flow`
-- Redis primary plus two replicas with persistence disabled, which uses
-  `emptyDir` and requires no `StorageClass`
+- Redis primary plus four replicas and Sentinel quorum three, with persistence
+  disabled; this uses `emptyDir` and requires no `StorageClass`
 - one stable HTTPS/WSS public endpoint while backend listeners remain HTTP
 - a Redis-backed deployment source-IP ceiling shared by API and signaling
   replicas, plus lower per-service buckets managed from HeteroCloud; forwarding
   metadata is trusted only from the three managed Caddy addresses
 - immutable Redis and Sentinel image digests; LiveKit `v1.13.5` and coturn
   `4.16.0`
-- three Prometheus replicas that scrape Kubernetes resource/cAdvisor,
+- five Prometheus replicas that scrape Kubernetes resource/cAdvisor,
   HeteroNetwork, LiveKit, and coturn metrics every 15 seconds and independently
   retain 15 days or 10 GB
-- three Grafana replicas backed by shared PostgreSQL, with a provisioned
+- five Grafana replicas backed by shared PostgreSQL, with a provisioned
   Prometheus datasource and Flow/VPN capacity dashboard
 
-The 54-connection total stays below the `heterocloud_flow` role limit of 90 and
+The 65-connection total stays below the `heterocloud_flow` role limit of 90 and
 leaves capacity in the PostgreSQL cluster's global 200-connection budget for
 HeteroCloud and Keycloak.
 
@@ -130,8 +129,9 @@ relay instead of bypassing the fixed policy.
 The internal API, signaling, and LiveKit signal ClusterIPs always remain
 available. Enable `api.publicService`, `signaling.publicService`, or
 `livekit.signal.publicService` only when a trusted TLS tier fronts that L4
-service and denies `/internal/*`. The HeteroNet deployment keeps all three
-disabled and exposes them only through per-node Caddy HTTPS/WSS listeners.
+service and denies `/internal/*`. The HeteroNet deployment enables all three as
+forwarded Services, restricts their source ranges to its three Caddy hosts, and
+uses the Caddy HTTPS/WSS listeners as the only Internet-facing entry points.
 
 The production browser endpoints are:
 

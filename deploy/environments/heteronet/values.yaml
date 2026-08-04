@@ -1,10 +1,9 @@
 runtime:
   hostNetwork: true
 
-# Flow-owned workloads stay on the three public-IP control-plane nodes. Redis
-# is a subchart and does not inherit this top-level selector.
-nodeSelector:
-  node-role.kubernetes.io/control-plane: ""
+# Forwarded workloads are eligible on every Kubernetes node. coturn has its own
+# public-ingress selector because it is the only direct workload.
+nodeSelector: {}
 
 secrets:
   existingSecret: heterocloud-flow-secrets
@@ -24,6 +23,9 @@ rateLimit:
     - 10.250.0.4/32
     - 10.250.0.5/32
     - 10.250.0.6/32
+    - 163.220.236.51/32
+    - 163.220.236.52/32
+    - 163.220.236.53/32
     - 127.0.0.0/8
     - ::1/128
 
@@ -31,38 +33,48 @@ database:
   # Every HeteroNet node exposes its local PostgreSQL HAProxy on loopback.
   externalPort: 25432
   maxConnections:
-    api: 8
-    matchmaker: 4
-    signaling: 6
+    api: 6
+    matchmaker: 3
+    signaling: 4
   # API pods use their local 127.0.0.1:25432 proxy and sqlx migration lock.
   migrateOnApiStart: true
   migrationJob:
     enabled: false
 
 api:
-  replicaCount: 3
+  replicaCount: 5
   publicUrls:
     - https://flow.heterocloud.mizuame.app
-  # Per-node Caddy terminates TLS and health-checks all three VPN upstreams.
-  # Enable this separate plaintext L4 service only behind a trusted TLS tier
-  # that also blocks /internal/*.
+  # Per-node Caddy terminates TLS and health-checks all three forwarded ingress
+  # addresses. Only those Caddy hosts may reach this plaintext service.
   publicService:
-    enabled: false
+    enabled: true
     port: 8080
-    annotations: {}
+    annotations:
+      networking.heteronetwork.io/ingress-replicas: "3"
+    loadBalancerSourceRanges:
+      - 163.220.236.51/32
+      - 163.220.236.52/32
+      - 163.220.236.53/32
 
 matchmaker:
-  replicaCount: 3
+  replicaCount: 5
 
 signaling:
-  replicaCount: 3
+  replicaCount: 5
   publicUrls:
     - wss://flow.heterocloud.mizuame.app
   publicService:
-    enabled: false
+    enabled: true
+    annotations:
+      networking.heteronetwork.io/ingress-replicas: "3"
+    loadBalancerSourceRanges:
+      - 163.220.236.51/32
+      - 163.220.236.52/32
+      - 163.220.236.53/32
 
 livekit:
-  replicaCount: 3
+  replicaCount: 5
   image:
     repository: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-livekit
     tag: "0.1.12"
@@ -70,9 +82,17 @@ livekit:
     - wss://flow.heterocloud.mizuame.app
   signal:
     publicService:
-      enabled: false
+      enabled: true
+      annotations:
+        networking.heteronetwork.io/ingress-replicas: "3"
+      loadBalancerSourceRanges:
+        - 163.220.236.51/32
+        - 163.220.236.52/32
+        - 163.220.236.53/32
   metrics:
     urls:
+      - http://10.250.0.2:6789/metrics
+      - http://10.250.0.3:6789/metrics
       - http://10.250.0.4:6789/metrics
       - http://10.250.0.5:6789/metrics
       - http://10.250.0.6:6789/metrics
@@ -113,11 +133,13 @@ coturn:
       memory: 128Mi
   annotations:
     networking.heteronetwork.io/ingress-replicas: "3"
+  nodeSelector:
+    networking.heteronetwork.io/public-ingress: "true"
 
 monitoring:
   prometheus:
     enabled: true
-    replicaCount: 3
+    replicaCount: 5
     service:
       type: LoadBalancer
       loadBalancerClass: heteronetwork.io/public
@@ -137,16 +159,15 @@ monitoring:
     storage:
       type: hostPath
       hostPath: /var/lib/heterocloud-flow/prometheus
-    # Every replica keeps a complete local TSDB on a separate control-plane
-    # node. A failed node loses one copy without interrupting queries.
-    nodeSelector:
-      node-role.kubernetes.io/control-plane: ""
+    # Every node keeps a complete local TSDB. A failed node loses one copy
+    # without interrupting queries or deleting the other four histories.
+    nodeSelector: {}
     podDisruptionBudget:
       enabled: true
-      minAvailable: 2
+      minAvailable: 3
   grafana:
     enabled: true
-    replicaCount: 3
+    replicaCount: 5
     anonymousViewerEnabled: true
     service:
       type: LoadBalancer
@@ -158,11 +179,10 @@ monitoring:
       enabled: true
       sourceCidrs:
         - 10.250.0.0/16
-    nodeSelector:
-      node-role.kubernetes.io/control-plane: ""
+    nodeSelector: {}
     podDisruptionBudget:
       enabled: true
-      minAvailable: 2
+      minAvailable: 3
 
 redis:
   enabled: true
@@ -170,6 +190,7 @@ redis:
     tag: ""
     digest: sha256:08863c2c3f4e051fb6139b38fa223e9c13be5033326a59bead182860d899bf98
   sentinel:
+    quorum: 3
     image:
       tag: ""
       digest: sha256:ae75dd69c192a632bdeb21baa6721080be5b12347e52add922036398b47631da
@@ -180,24 +201,16 @@ redis:
       create: true
       minAvailable: 1
   replica:
-    # Sentinel mode uses this as the total node count: one primary and two
+    # Sentinel mode uses this as the total node count: one primary and four
     # replicas after election.
-    replicaCount: 3
+    replicaCount: 5
     podAntiAffinityPreset: hard
-    # Flow's Redis quorum is part of the control data plane. Keep it on the
-    # three always-on control-plane nodes so transient edge/worker loss cannot
-    # take LiveKit and signaling down with it.
-    nodeSelector:
-      node-role.kubernetes.io/control-plane: ""
-    tolerations:
-      - key: node-role.kubernetes.io/control-plane
-        operator: Exists
-        effect: NoSchedule
+    nodeSelector: {}
     persistence:
       enabled: false
     pdb:
       create: true
-      minAvailable: 2
+      minAvailable: 3
 
 postgresql-ha:
   enabled: false

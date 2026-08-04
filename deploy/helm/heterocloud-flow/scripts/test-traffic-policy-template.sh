@@ -29,6 +29,9 @@ test "$(grep -c 'networking.heteronetwork.io/traffic-mode: direct' "$tmp_dir/tes
 test "$(grep -c 'networking.heteronetwork.io/traffic-mode: "direct"' "$tmp_dir/test.yaml")" -eq 1
 test "$(grep -c 'networking.heteronetwork.io/traffic-mode: direct' "$tmp_dir/heteronet.yaml")" -eq 1
 test "$(grep -c 'networking.heteronetwork.io/traffic-mode: "direct"' "$tmp_dir/heteronet.yaml")" -eq 1
+test "$(grep -c 'networking.heteronetwork.io/traffic-mode: "forwarded"' "$tmp_dir/heteronet.yaml")" -eq 6
+test "$(grep -c 'externalTrafficPolicy: Cluster' "$tmp_dir/heteronet.yaml")" -eq 6
+test "$(grep -c 'loadBalancerSourceRanges:' "$tmp_dir/heteronet.yaml")" -eq 5
 grep -q 'use_external_ip: false' "$tmp_dir/test.yaml"
 grep -q 'use_external_ip: false' "$tmp_dir/heteronet.yaml"
 ! grep -q 'use_external_ip: true' "$tmp_dir/test.yaml"

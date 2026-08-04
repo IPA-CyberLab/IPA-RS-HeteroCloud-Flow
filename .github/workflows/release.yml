@@ -65,6 +65,8 @@ jobs:
         run: bash deploy/helm/heterocloud-flow/scripts/test-coturn-template.sh
       - name: Test fixed Flow traffic policy
         run: bash deploy/helm/heterocloud-flow/scripts/test-traffic-policy-template.sh
+      - name: Test five-node scheduling
+        run: bash deploy/helm/heterocloud-flow/scripts/test-scheduling-template.sh
       - name: Validate Prometheus configuration
         run: bash deploy/helm/heterocloud-flow/scripts/test-prometheus-template.sh
       - name: Validate Grafana configuration

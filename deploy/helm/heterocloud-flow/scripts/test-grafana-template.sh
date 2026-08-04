@@ -12,11 +12,11 @@ helm template heterocloud-flow "$chart_dir" \
   --values "$environment_values" \
   --show-only templates/grafana.yaml > "$work_dir/grafana.yaml"
 
-grep -q 'replicas: 3' "$work_dir/grafana.yaml"
+grep -q 'replicas: 5' "$work_dir/grafana.yaml"
 grep -q 'hostNetwork: true' "$work_dir/grafana.yaml"
 grep -q 'grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63' "$work_dir/grafana.yaml"
 grep -q 'kind: PodDisruptionBudget' "$work_dir/grafana.yaml"
-grep -q 'minAvailable: 2' "$work_dir/grafana.yaml"
+grep -q 'minAvailable: 3' "$work_dir/grafana.yaml"
 grep -q 'loadBalancerClass: "heteronetwork.io/public"' "$work_dir/grafana.yaml"
 grep -q 'networking.heteronetwork.io/traffic-mode: "forwarded"' "$work_dir/grafana.yaml"
 grep -q 'networking.heteronetwork.io/ingress-replicas: "3"' "$work_dir/grafana.yaml"

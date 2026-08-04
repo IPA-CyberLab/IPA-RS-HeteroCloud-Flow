@@ -108,7 +108,12 @@
         },
         "publicService": {
           "type": "object",
-          "required": ["enabled", "port", "annotations"],
+          "required": [
+            "enabled",
+            "port",
+            "annotations",
+            "loadBalancerSourceRanges"
+          ],
           "properties": {
             "enabled": {"type": "boolean"},
             "port": {
@@ -116,7 +121,12 @@
               "minimum": 1,
               "maximum": 65535
             },
-            "annotations": {"type": "object"}
+            "annotations": {"type": "object"},
+            "loadBalancerSourceRanges": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 3, "maxLength": 64}
+            }
           }
         }
       }
@@ -141,7 +151,12 @@
         },
         "publicService": {
           "type": "object",
-          "required": ["enabled", "port", "annotations"],
+          "required": [
+            "enabled",
+            "port",
+            "annotations",
+            "loadBalancerSourceRanges"
+          ],
           "properties": {
             "enabled": {"type": "boolean"},
             "port": {
@@ -149,7 +164,12 @@
               "minimum": 1,
               "maximum": 65535
             },
-            "annotations": {"type": "object"}
+            "annotations": {"type": "object"},
+            "loadBalancerSourceRanges": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 3, "maxLength": 64}
+            }
           }
         }
       }
@@ -177,7 +197,12 @@
             },
             "publicService": {
               "type": "object",
-              "required": ["enabled", "port", "annotations"],
+              "required": [
+                "enabled",
+                "port",
+                "annotations",
+                "loadBalancerSourceRanges"
+              ],
               "properties": {
                 "enabled": {"type": "boolean"},
                 "port": {
@@ -185,7 +210,16 @@
                   "minimum": 1,
                   "maximum": 65535
                 },
-                "annotations": {"type": "object"}
+                "annotations": {"type": "object"},
+                "loadBalancerSourceRanges": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 64
+                  }
+                }
               }
             }
           }
@@ -274,6 +308,10 @@
               "items": {"type": "string", "pattern": "^http://"}
             }
           }
+        },
+        "nodeSelector": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
         }
       }
     },

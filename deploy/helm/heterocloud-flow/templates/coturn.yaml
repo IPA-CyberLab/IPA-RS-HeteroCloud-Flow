@@ -1,6 +1,7 @@
 {{- include "flow.rejectTrafficModeAnnotation" (dict "annotations" .Values.coturn.annotations "path" "coturn.annotations") -}}
 {{- $relayAddressMode := .Values.coturn.relayAddress.mode -}}
 {{- $relayAddressMappings := .Values.coturn.relayAddress.mappings -}}
+{{- $coturnNodeSelector := mergeOverwrite (deepCopy (.Values.nodeSelector | default dict)) (.Values.coturn.nodeSelector | default dict) -}}
 {{- $relayAddressMappingArgs := list -}}
 {{- $mappingNodeNames := dict -}}
 {{- $mappingPublicIps := dict -}}
@@ -232,7 +233,7 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-      {{- with .Values.nodeSelector }}
+      {{- with $coturnNodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}

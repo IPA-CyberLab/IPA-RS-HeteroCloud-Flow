@@ -182,6 +182,10 @@ spec:
   loadBalancerClass: heteronetwork.io/public
   allocateLoadBalancerNodePorts: false
   externalTrafficPolicy: Cluster
+  {{- with .Values.signaling.publicService.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     {{- include "flow.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: signaling
