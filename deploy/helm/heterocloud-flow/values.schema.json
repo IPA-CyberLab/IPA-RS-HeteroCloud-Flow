@@ -473,6 +473,7 @@
           "required": [
             "enabled",
             "replicaCount",
+            "listenPort",
             "image",
             "prometheusUrl",
             "existingSecret",
@@ -488,6 +489,7 @@
           "properties": {
             "enabled": {"type": "boolean"},
             "replicaCount": {"type": "integer", "minimum": 1, "maximum": 64},
+            "listenPort": {"type": "integer", "minimum": 1024, "maximum": 65535},
             "image": {"$ref": "#/$defs/containerImage"},
             "prometheusUrl": {
               "type": "string",

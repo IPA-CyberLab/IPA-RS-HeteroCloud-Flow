@@ -268,6 +268,7 @@ monitoring:
   grafana:
     enabled: false
     replicaCount: 1
+    listenPort: 3000
     image:
       repository: grafana/grafana
       tag: 13.1.0

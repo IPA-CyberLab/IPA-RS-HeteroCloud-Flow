@@ -14,6 +14,7 @@ helm template heterocloud-flow "$chart_dir" \
 
 grep -q 'replicas: 5' "$work_dir/grafana.yaml"
 grep -q 'hostNetwork: true' "$work_dir/grafana.yaml"
+grep -q 'containerPort: 33000' "$work_dir/grafana.yaml"
 grep -q 'grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63' "$work_dir/grafana.yaml"
 grep -q 'kind: PodDisruptionBudget' "$work_dir/grafana.yaml"
 grep -q 'minAvailable: 3' "$work_dir/grafana.yaml"
@@ -53,7 +54,7 @@ helm template heterocloud-flow "$chart_dir" \
   --values "$environment_values" \
   --show-only templates/networkpolicy.yaml > "$work_dir/networkpolicy.yaml"
 grep -q 'name: heterocloud-flow-grafana' "$work_dir/networkpolicy.yaml"
-grep -q 'port: 3000' "$work_dir/networkpolicy.yaml"
+grep -q 'port: 33000' "$work_dir/networkpolicy.yaml"
 grep -q 'cidr: "10.250.0.0/16"' "$work_dir/networkpolicy.yaml"
 
 if helm template heterocloud-flow "$chart_dir" \

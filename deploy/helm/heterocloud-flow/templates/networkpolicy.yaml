@@ -175,7 +175,7 @@ spec:
         {{- end }}
         {{- end }}
       ports:
-        - port: {{ .Values.monitoring.grafana.service.port }}
+        - port: {{ .Values.monitoring.grafana.listenPort }}
           protocol: TCP
   # Grafana reaches the in-cluster Prometheus Service and the host-network
   # PostgreSQL HA proxy. Destination access is constrained by those services.

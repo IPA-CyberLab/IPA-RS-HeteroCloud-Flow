@@ -339,7 +339,7 @@ spec:
               value: 0.0.0.0
             {{- end }}
             - name: GF_SERVER_HTTP_PORT
-              value: {{ $grafana.service.port | quote }}
+              value: {{ $grafana.listenPort | quote }}
             - name: GF_SERVER_ENABLE_GZIP
               value: "true"
             - name: GF_DATABASE_TYPE
@@ -404,7 +404,7 @@ spec:
               value: browser
           ports:
             - name: http
-              containerPort: {{ $grafana.service.port }}
+              containerPort: {{ $grafana.listenPort }}
               protocol: TCP
           readinessProbe:
             httpGet:

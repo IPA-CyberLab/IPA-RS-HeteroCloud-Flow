@@ -168,6 +168,9 @@ monitoring:
   grafana:
     enabled: true
     replicaCount: 5
+    # Port 3000 is already occupied by an unrelated host service on one worker.
+    # The LoadBalancer remains on 3000 and targets this private listener.
+    listenPort: 33000
     anonymousViewerEnabled: true
     service:
       type: LoadBalancer
