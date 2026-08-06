@@ -312,13 +312,12 @@ fails pod startup when the current host IP is not mapped.
 
 [`deploy/environments/heteronet/values.yaml`](deploy/environments/heteronet/values.yaml)
 enables host networking so each Rust process reaches the node-local PostgreSQL
-HAProxy at `127.0.0.1:25432`. Its pools are API `8 x 3`, matchmaker `4 x 3`,
-and signaling `6 x 3`, for 54 steady-state Flow connections against the
-`heterocloud_flow` role's limit of 90. Migrations run inside the host-networked
-API pods and consume their existing pools; the separate migration Job is
-disabled. Flow-owned workloads select the three public-IP control-plane nodes;
-Redis remains independently scheduled by its subchart. Redis Sentinel uses
-ephemeral `emptyDir` storage because the cluster has no `StorageClass`.
+HAProxy at `127.0.0.1:25432`. Database clients select nodes labeled
+`database.heteronetwork.io/proxy-ready=true`; LiveKit and Prometheus remain
+eligible on every node. Migrations run inside the host-networked API pods and
+consume their existing pools; the separate migration Job is disabled. Redis
+remains independently scheduled by its subchart and uses ephemeral `emptyDir`
+storage because the cluster has no `StorageClass`.
 
 Create the required Secret first. See
 [`deploy/helm/heterocloud-flow/README.md`](deploy/helm/heterocloud-flow/README.md)

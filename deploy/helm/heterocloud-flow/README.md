@@ -78,8 +78,10 @@ overlay sets:
 
 - `hostNetwork: true` and `ClusterFirstWithHostNet` for API, matchmaker, and
   signaling; LiveKit and coturn are host-network media pods as well
-- five replicas of each forwarded workload, spread one per Kubernetes node;
-  coturn alone is selected onto the three `public-ingress=true` nodes
+- five replicas of each forwarded workload; database clients select nodes with
+  `database.heteronetwork.io/proxy-ready=true`, while LiveKit and Prometheus
+  spread across every Kubernetes node; coturn alone is selected onto the three
+  `public-ingress=true` nodes
 - explicit coturn `direct-public` relay addressing; each VPN `status.hostIP`
   selects a public IPv4 address that is locally assigned on the same host, and
   coturn binds its relay socket directly to that public address

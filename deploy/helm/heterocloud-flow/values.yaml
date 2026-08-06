@@ -47,6 +47,9 @@ rateLimit:
 
 database:
   externalPort: 5432
+  # Select nodes where a node-local database endpoint is available. This is
+  # merged with the global nodeSelector for every database client workload.
+  nodeSelector: {}
   maxConnections:
     api: 20
     matchmaker: 10

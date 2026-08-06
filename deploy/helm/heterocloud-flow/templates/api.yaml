@@ -1,4 +1,5 @@
 {{- include "flow.rejectTrafficModeAnnotation" (dict "annotations" .Values.api.publicService.annotations "path" "api.publicService.annotations") -}}
+{{- $databaseNodeSelector := mergeOverwrite (deepCopy (.Values.nodeSelector | default dict)) (.Values.database.nodeSelector | default dict) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -182,7 +183,7 @@ spec:
             {{- include "flow.rustSecurityContext" . | nindent 12 }}
           resources:
             {{- toYaml .Values.api.resources | nindent 12 }}
-      {{- with .Values.nodeSelector }}
+      {{- with $databaseNodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}

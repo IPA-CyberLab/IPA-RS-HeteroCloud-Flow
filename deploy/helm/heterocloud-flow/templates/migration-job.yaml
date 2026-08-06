@@ -1,4 +1,5 @@
 {{- if .Values.database.migrationJob.enabled }}
+{{- $databaseNodeSelector := mergeOverwrite (deepCopy (.Values.nodeSelector | default dict)) (.Values.database.nodeSelector | default dict) -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -93,4 +94,12 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+      {{- with $databaseNodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}

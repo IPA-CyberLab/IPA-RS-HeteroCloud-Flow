@@ -76,12 +76,16 @@
     },
     "database": {
       "type": "object",
-      "required": ["externalPort", "maxConnections"],
+      "required": ["externalPort", "nodeSelector", "maxConnections"],
       "properties": {
         "externalPort": {
           "type": "integer",
           "minimum": 1,
           "maximum": 65535
+        },
+        "nodeSelector": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
         },
         "maxConnections": {
           "type": "object",

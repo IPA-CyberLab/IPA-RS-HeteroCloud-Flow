@@ -30,8 +30,11 @@ rateLimit:
     - ::1/128
 
 database:
-  # Every HeteroNet node exposes its local PostgreSQL HAProxy on loopback.
+  # Database clients run only where the node-local PostgreSQL HAProxy is ready.
+  # Media and monitoring workloads remain eligible on every Kubernetes node.
   externalPort: 25432
+  nodeSelector:
+    database.heteronetwork.io/proxy-ready: "true"
   maxConnections:
     api: 6
     matchmaker: 3

@@ -14,6 +14,14 @@ done
 
 for component in api matchmaker signaling livekit prometheus grafana; do
   grep -q '^  replicas: 5$' "$tmp_dir/${component}.yaml"
+done
+
+for component in api matchmaker signaling grafana; do
+  grep -q '^      nodeSelector:$' "$tmp_dir/${component}.yaml"
+  grep -q 'database.heteronetwork.io/proxy-ready: "true"' "$tmp_dir/${component}.yaml"
+done
+
+for component in livekit prometheus; do
   ! grep -q '^      nodeSelector:' "$tmp_dir/${component}.yaml"
 done
 
@@ -27,5 +35,11 @@ test "$(grep -c '^  minAvailable: 2$' "$tmp_dir/pdb.yaml")" -eq 1
 helm template flow "$chart_dir" -f "$environment_values" >"$tmp_dir/all.yaml"
 test "$(grep -c '^  replicas: 5$' "$tmp_dir/all.yaml")" -eq 6
 grep -Eq 'sentinel monitor flowmaster .* 6379 2' "$tmp_dir/all.yaml"
+
+helm template flow "$chart_dir" \
+  --set-string 'database.nodeSelector.database\.example\.com/proxy-ready=true' \
+  --show-only templates/migration-job.yaml >"$tmp_dir/migration.yaml"
+grep -q '^      nodeSelector:$' "$tmp_dir/migration.yaml"
+grep -q 'database.example.com/proxy-ready: "true"' "$tmp_dir/migration.yaml"
 
 printf 'Flow five-node scheduling tests passed\n'
