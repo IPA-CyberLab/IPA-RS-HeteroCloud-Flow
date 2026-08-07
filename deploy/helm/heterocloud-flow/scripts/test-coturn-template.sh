@@ -191,6 +191,14 @@ assert_contains '--listening-port=3479' "${tmp_dir}/coturn-pools.yaml"
 assert_contains '--min-port=50000' "${tmp_dir}/coturn-pools.yaml"
 assert_contains '--max-port=50100' "${tmp_dir}/coturn-pools.yaml"
 assert_contains '--prometheus-port=9642' "${tmp_dir}/coturn-pools.yaml"
+selector_pool_deployments=$(awk '
+  $0 == "kind: Deployment" { deployment = 1; name = ""; in_selector = 0; next }
+  deployment && $1 == "name:" && name == "" { name = $2; next }
+  deployment && $0 == "  selector:" { in_selector = 1; next }
+  deployment && $0 == "  template:" { in_selector = 0; next }
+  in_selector && /flow.heterocloud.io\/turn-pool:/ { print name }
+' "${tmp_dir}/coturn-pools.yaml")
+test "${selector_pool_deployments}" = heterocloud-flow-coturn-secondary
 helm template flow "${chart_dir}" \
   -f "${test_values}" \
   --show-only templates/api.yaml \

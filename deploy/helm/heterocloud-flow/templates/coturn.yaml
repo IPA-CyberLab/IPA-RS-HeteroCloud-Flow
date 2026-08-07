@@ -106,7 +106,9 @@ spec:
     matchLabels:
       {{- include "flow.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: coturn
+      {{- if ne $pool.suffix "" }}
       flow.heterocloud.io/turn-pool: {{ $pool.name }}
+      {{- end }}
   template:
     metadata:
       labels:
