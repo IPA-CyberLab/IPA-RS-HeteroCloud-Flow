@@ -242,16 +242,6 @@ data:
           ],
           "title": "Lazy-connect probe outcomes",
           "type": "timeseries"
-        },
-        {
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "red", "index": 0, "text": "Down"}, "1": {"color": "green", "index": 1, "text": "Up"}}, "type": "value"}], "max": 1, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
-          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 36},
-          "id": 13,
-          "options": {"alignValue": "left", "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "mergeValues": true, "rowHeight": 0.9, "showValue": "auto", "tooltip": {"mode": "single", "sort": "none"}},
-          "targets": [{"editorMode": "code", "expr": "up{job=~\"heteronetwork-agents|prometheus|flow-livekit|flow-coturn|grafana\"}", "legendFormat": "", "range": true, "refId": "A"}],
-          "title": "Monitoring target availability",
-          "type": "state-timeline"
         }
       ],
       "refresh": "15s",

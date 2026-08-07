@@ -302,10 +302,10 @@ replica upgrades the shared schema.
 
 The provisioned `HeteroCloud Flow and VPN` dashboard covers node CPU and
 memory, total and HeteroNetwork-interface bandwidth, LiveKit rooms and
-participants, TURN allocations and transfer rates, VPN peer/path state,
-LazyConnect probes, and monitoring target availability. Prometheus also
-scrapes each Grafana replica and raises `GrafanaReplicaMissing` when fewer than
-the configured replica count are healthy.
+participants, TURN allocations and transfer rates, VPN peer/path state, and
+LazyConnect probes. Prometheus also scrapes each Grafana replica and raises
+`GrafanaReplicaMissing` when fewer than the configured replica count are
+healthy.
 
 Production Grafana binds to each control-plane node's VPN InternalIP. Its
 `heteronetwork.io/public` LoadBalancer runs in `forwarded` mode with three

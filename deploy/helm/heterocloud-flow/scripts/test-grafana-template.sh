@@ -39,10 +39,11 @@ awk '
 jq -e '
   .uid == "heterocloud-flow-overview" and
   .title == "HeteroCloud Flow and VPN" and
-  (.panels | length) >= 13 and
+  (.panels | length) == 12 and
   ([.panels[].title] | index("HeteroNetwork VPN bandwidth") != null) and
   ([.panels[].title] | index("TURN throughput") != null) and
-  ([.panels[].title] | index("Node CPU utilization") != null)
+  ([.panels[].title] | index("Node CPU utilization") != null) and
+  ([.panels[].title] | index("Monitoring target availability") == null)
 ' "$work_dir/dashboard.json" >/dev/null
 
 grep -q 'heteronetwork:node_vpn_receive_bytes_per_second' "$work_dir/dashboard.json"
