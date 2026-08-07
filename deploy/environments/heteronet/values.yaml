@@ -51,7 +51,9 @@ api:
   # Per-node Caddy terminates TLS and health-checks all three forwarded ingress
   # addresses. Only those Caddy hosts may reach this plaintext service.
   publicService:
-    enabled: true
+    # HTTP API is reachable only through the Envoy Gateway route. Keeping a
+    # public Service here would leave a rate-limit bypass around the gateway.
+    enabled: false
     port: 8080
     annotations:
       networking.heteronetwork.io/ingress-replicas: "3"
@@ -68,7 +70,8 @@ signaling:
   publicUrls:
     - wss://flow.heterocloud.mizuame.app
   publicService:
-    enabled: true
+    # WebSocket signaling is reachable only through the Envoy Gateway route.
+    enabled: false
     annotations:
       networking.heteronetwork.io/ingress-replicas: "3"
     loadBalancerSourceRanges:
@@ -85,7 +88,8 @@ livekit:
     - wss://flow.heterocloud.mizuame.app
   signal:
     publicService:
-      enabled: true
+      # LiveKit signaling shares the Envoy Gateway HTTP/WSS entry point.
+      enabled: false
       annotations:
         networking.heteronetwork.io/ingress-replicas: "3"
       loadBalancerSourceRanges:
@@ -172,6 +176,7 @@ monitoring:
       interface: heteronetwork0
     additionalScrapeNamespaces:
       - argocd
+      - envoy-gateway-system
     storage:
       type: hostPath
       hostPath: /var/lib/heterocloud-flow/prometheus

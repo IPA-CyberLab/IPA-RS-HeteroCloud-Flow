@@ -150,6 +150,14 @@ fail-closed with `503`, and readiness also verifies the limiter backend.
 cannot prepend a forged address. Direct callers and untrusted proxies are
 limited by their socket peer address.
 
+The public HTTP and WebSocket entry point is the GitOps-managed Envoy Gateway
+behind the HeteroNetwork public nodes. Caddy only terminates the public TLS
+certificate and forwards to that Gateway; the Flow API, signaling, and LiveKit
+signaling Services are private ClusterIP Services. The Envoy Gateway keeps a
+shared per-source-IP ceiling across all replicas using the Flow Redis primary.
+TURN remains a direct HeteroNetwork LoadBalancer data-plane service, while
+LiveKit RTC remains a forwarded UDP/TCP data-plane service.
+
 `p2p` join responses identify `flow-signaling.v1`, link every HA AsyncAPI
 document, and contain an ordered `connection.urls` array of WSS Flow signaling
 URLs with `/v1/signal/{room_id}` appended to every origin. `sfu` responses
