@@ -248,6 +248,35 @@
       "required": ["replicaCount", "publicHosts", "relayAddress", "metrics"],
       "properties": {
         "replicaCount": {"type": "integer", "minimum": 3},
+        "additionalPools": {
+          "type": "array",
+          "maxItems": 7,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "replicaCount",
+              "servicePort",
+              "relayPortMin",
+              "relayPortMax",
+              "metricsPort"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24,
+                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+              },
+              "replicaCount": {"type": "integer", "minimum": 1, "maximum": 16},
+              "servicePort": {"type": "integer", "minimum": 1024, "maximum": 65535},
+              "relayPortMin": {"type": "integer", "minimum": 1024, "maximum": 65535},
+              "relayPortMax": {"type": "integer", "minimum": 1024, "maximum": 65535},
+              "metricsPort": {"type": "integer", "minimum": 1024, "maximum": 65535}
+            }
+          }
+        },
         "publicHosts": {
           "type": "array",
           "minItems": 1,

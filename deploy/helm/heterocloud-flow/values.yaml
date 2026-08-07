@@ -148,6 +148,7 @@ livekit:
 
 coturn:
   replicaCount: 3
+  additionalPools: []
   image:
     repository: coturn/coturn
     tag: 4.16.0

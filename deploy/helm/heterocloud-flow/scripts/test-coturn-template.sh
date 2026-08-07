@@ -138,7 +138,7 @@ assert_contains 'node turn-node-c.example.test with host IP 10.0.0.11 has no mat
 expect_render_failure \
   direct-public \
   '[{"nodeName":"turn-node-a","publicIp":"192.0.2.10","privateIp":"10.0.0.10"},{"nodeName":"turn-node-b","publicIp":"192.0.2.11","privateIp":"10.0.0.11"}]' \
-  'must contain at least coturn.replicaCount entries'
+  'must contain at least 3 entries for pool "primary"'
 
 expect_render_failure \
   direct-public \
@@ -170,7 +170,7 @@ if render --set coturn.replicaCount=17 \
   printf 'expected excessive coturn replica count to fail\n' >&2
   exit 1
 fi
-assert_contains 'coturn.replicaCount must not exceed 16' "${tmp_dir}/replica-count-error.log"
+assert_contains 'coturn pool "primary" replicaCount must not exceed 16' "${tmp_dir}/replica-count-error.log"
 
 render \
   --set-string coturn.relayAddress.mode=host \
@@ -180,5 +180,39 @@ assert_not_contains 'nodeAffinity:' "${tmp_dir}/coturn-host.yaml"
 assert_contains 'name: TURN_RELAY_ADDRESS_MAPPINGS' "${tmp_dir}/coturn-host.yaml"
 assert_contains 'value: "host"' "${tmp_dir}/coturn-host.yaml"
 assert_contains 'value: ""' "${tmp_dir}/coturn-host.yaml"
+
+render \
+  --set-json 'coturn.additionalPools=[{"name":"secondary","replicaCount":3,"servicePort":3479,"relayPortMin":50000,"relayPortMax":50100,"metricsPort":9642}]' \
+  >"${tmp_dir}/coturn-pools.yaml"
+assert_contains 'name: heterocloud-flow-coturn-secondary' "${tmp_dir}/coturn-pools.yaml"
+assert_contains 'name: heterocloud-flow-turn-secondary' "${tmp_dir}/coturn-pools.yaml"
+assert_contains 'flow.heterocloud.io/turn-pool: secondary' "${tmp_dir}/coturn-pools.yaml"
+assert_contains '--listening-port=3479' "${tmp_dir}/coturn-pools.yaml"
+assert_contains '--min-port=50000' "${tmp_dir}/coturn-pools.yaml"
+assert_contains '--max-port=50100' "${tmp_dir}/coturn-pools.yaml"
+assert_contains '--prometheus-port=9642' "${tmp_dir}/coturn-pools.yaml"
+helm template flow "${chart_dir}" \
+  -f "${test_values}" \
+  --show-only templates/api.yaml \
+  --set-json 'coturn.additionalPools=[{"name":"secondary","replicaCount":3,"servicePort":3479,"relayPortMin":50000,"relayPortMax":50100,"metricsPort":9642}]' \
+  >"${tmp_dir}/api-pools.yaml"
+assert_contains 'turn:turn-a.example.test:3479?transport=udp' "${tmp_dir}/api-pools.yaml"
+assert_contains 'turn:turn-a.example.test:3479?transport=tcp' "${tmp_dir}/api-pools.yaml"
+
+if render \
+  --set-json 'coturn.additionalPools=[{"name":"secondary","replicaCount":3,"servicePort":3478,"relayPortMin":50000,"relayPortMax":50100,"metricsPort":9642}]' \
+  >"${tmp_dir}/unexpected-duplicate-port.yaml" 2>"${tmp_dir}/duplicate-port-error.log"; then
+  printf 'expected duplicate TURN service port to fail\n' >&2
+  exit 1
+fi
+assert_contains 'coturn service port 3478 is used by more than one pool' "${tmp_dir}/duplicate-port-error.log"
+
+if render \
+  --set-json 'coturn.additionalPools=[{"name":"secondary","replicaCount":3,"servicePort":3479,"relayPortMin":49200,"relayPortMax":50000,"metricsPort":9642}]' \
+  >"${tmp_dir}/unexpected-overlap.yaml" 2>"${tmp_dir}/overlap-error.log"; then
+  printf 'expected overlapping TURN relay ranges to fail\n' >&2
+  exit 1
+fi
+assert_contains 'relay port ranges for pools "primary" and "secondary" overlap' "${tmp_dir}/overlap-error.log"
 
 printf 'coturn Helm relay address tests passed\n'

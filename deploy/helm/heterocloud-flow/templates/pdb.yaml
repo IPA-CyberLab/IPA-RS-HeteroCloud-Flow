@@ -1,9 +1,13 @@
+{{- $coturnReplicas := int .Values.coturn.replicaCount -}}
+{{- range $pool := .Values.coturn.additionalPools -}}
+{{- $coturnReplicas = add $coturnReplicas (int $pool.replicaCount) -}}
+{{- end -}}
 {{- $components := list
   (dict "name" "api" "replicas" .Values.api.replicaCount)
   (dict "name" "matchmaker" "replicas" .Values.matchmaker.replicaCount)
   (dict "name" "signaling" "replicas" .Values.signaling.replicaCount)
   (dict "name" "livekit" "replicas" .Values.livekit.replicaCount)
-  (dict "name" "coturn" "replicas" .Values.coturn.replicaCount)
+  (dict "name" "coturn" "replicas" $coturnReplicas)
 -}}
 {{- range $index, $component := $components }}
 {{- if $index }}

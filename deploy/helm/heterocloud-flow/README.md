@@ -175,6 +175,17 @@ selection keys:
 
 ```yaml
 coturn:
+  replicaCount: 3
+  servicePort: 3478
+  relayPortMin: 49152
+  relayPortMax: 57343
+  additionalPools:
+    - name: secondary
+      replicaCount: 3
+      servicePort: 3479
+      relayPortMin: 57344
+      relayPortMax: 65535
+      metricsPort: 9642
   relayAddress:
     mode: direct-public
     mappings:
@@ -199,8 +210,12 @@ either check fails. In `direct-public` mode there is no
 `--external-ip` argument: binding the local public address makes
 `XOR-RELAYED-ADDRESS` public without relying on NAT.
 
-The mapping list must contain at least `coturn.replicaCount` unique node names,
-public addresses, and private addresses. Before replacing a node or changing
+Each pool is a separate host-network Deployment. Pools must use distinct TURN
+listener ports, metrics ports, and non-overlapping relay ranges, which permits
+one pod from every pool on each mapped node. The API returns UDP and TCP URLs
+for every configured pool. The mapping list must contain at least as many
+unique node names, public addresses, and private addresses as the largest pool
+replica count. Before replacing a node or changing
 its VPN address, update this list in the same Helm rollout. The Kubernetes Node
 name must match `nodeName`, and `status.addresses[InternalIP]` must match
 `privateIp`. Open the TURN listener and the complete relay port range on every

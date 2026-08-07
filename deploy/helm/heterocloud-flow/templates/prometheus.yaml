@@ -29,8 +29,14 @@
 {{- end -}}
 {{- $prometheusName := printf "%s-prometheus" (include "flow.fullname" .) -}}
 {{- $clusterRoleName := printf "%s-%s" $prometheusName .Release.Namespace | trunc 63 | trimSuffix "-" -}}
+{{- $coturnReplicas := int .Values.coturn.replicaCount -}}
 {{- $relayPorts := add1 (sub (int .Values.coturn.relayPortMax) (int .Values.coturn.relayPortMin)) -}}
-{{- $relayCapacity := mul $relayPorts (int .Values.coturn.replicaCount) -}}
+{{- $relayCapacity := mul $relayPorts $coturnReplicas -}}
+{{- range $pool := .Values.coturn.additionalPools -}}
+{{- $poolRelayPorts := add1 (sub (int $pool.relayPortMax) (int $pool.relayPortMin)) -}}
+{{- $coturnReplicas = add $coturnReplicas (int $pool.replicaCount) -}}
+{{- $relayCapacity = add $relayCapacity (mul $poolRelayPorts (int $pool.replicaCount)) -}}
+{{- end -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -300,7 +306,7 @@ data:
             annotations:
               summary: TURN relay allocation capacity is above 80 percent
           - alert: FlowMetricsTargetMissing
-            expr: count(up{job="flow-coturn"} == 1) < {{ .Values.coturn.replicaCount }} or count(up{job="flow-livekit"} == 1) < {{ .Values.livekit.replicaCount }}
+            expr: count(up{job="flow-coturn"} == 1) < {{ $coturnReplicas }} or count(up{job="flow-livekit"} == 1) < {{ .Values.livekit.replicaCount }}
             for: 2m
             labels:
               severity: warning

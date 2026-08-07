@@ -27,21 +27,76 @@
 {{- if and (eq $relayAddressMode "host") (gt (len $relayAddressMappings) 0) -}}
 {{- fail "coturn.relayAddress.mappings must be empty when mode is host" -}}
 {{- end -}}
-{{- if gt (int .Values.coturn.replicaCount) 16 -}}
-{{- fail "coturn.replicaCount must not exceed 16" -}}
+{{- $coturnPools := list (dict
+  "name" "primary"
+  "suffix" ""
+  "replicaCount" (int .Values.coturn.replicaCount)
+  "servicePort" (int .Values.coturn.servicePort)
+  "relayPortMin" (int .Values.coturn.relayPortMin)
+  "relayPortMax" (int .Values.coturn.relayPortMax)
+  "metricsPort" (int .Values.coturn.metrics.port)
+) -}}
+{{- range $additionalPool := .Values.coturn.additionalPools -}}
+{{- $coturnPools = append $coturnPools (dict
+  "name" $additionalPool.name
+  "suffix" (printf "-%s" $additionalPool.name)
+  "replicaCount" (int $additionalPool.replicaCount)
+  "servicePort" (int $additionalPool.servicePort)
+  "relayPortMin" (int $additionalPool.relayPortMin)
+  "relayPortMax" (int $additionalPool.relayPortMax)
+  "metricsPort" (int $additionalPool.metricsPort)
+) -}}
 {{- end -}}
-{{- if and (ne $relayAddressMode "host") (lt (len $relayAddressMappings) (int .Values.coturn.replicaCount)) -}}
-{{- fail "coturn.relayAddress.mappings must contain at least coturn.replicaCount entries in direct-public or one-to-one-nat mode" -}}
+{{- $poolNames := dict -}}
+{{- $servicePorts := dict -}}
+{{- $metricsPorts := dict -}}
+{{- $relayRanges := list -}}
+{{- range $pool := $coturnPools -}}
+{{- if hasKey $poolNames $pool.name -}}
+{{- fail (printf "coturn pool name %q is duplicated" $pool.name) -}}
 {{- end -}}
+{{- $_ := set $poolNames $pool.name true -}}
+{{- if gt $pool.replicaCount 16 -}}
+{{- fail (printf "coturn pool %q replicaCount must not exceed 16" $pool.name) -}}
+{{- end -}}
+{{- if and (ne $relayAddressMode "host") (lt (len $relayAddressMappings) $pool.replicaCount) -}}
+{{- fail (printf "coturn.relayAddress.mappings must contain at least %d entries for pool %q" $pool.replicaCount $pool.name) -}}
+{{- end -}}
+{{- $servicePortKey := toString $pool.servicePort -}}
+{{- if hasKey $servicePorts $servicePortKey -}}
+{{- fail (printf "coturn service port %d is used by more than one pool" $pool.servicePort) -}}
+{{- end -}}
+{{- $_ := set $servicePorts $servicePortKey true -}}
+{{- $metricsPortKey := toString $pool.metricsPort -}}
+{{- if hasKey $metricsPorts $metricsPortKey -}}
+{{- fail (printf "coturn metrics port %d is used by more than one pool" $pool.metricsPort) -}}
+{{- end -}}
+{{- $_ := set $metricsPorts $metricsPortKey true -}}
+{{- if gt $pool.relayPortMin $pool.relayPortMax -}}
+{{- fail (printf "coturn pool %q relayPortMin must not exceed relayPortMax" $pool.name) -}}
+{{- end -}}
+{{- range $existingRange := $relayRanges -}}
+{{- if and (le $pool.relayPortMin $existingRange.max) (le $existingRange.min $pool.relayPortMax) -}}
+{{- fail (printf "coturn relay port ranges for pools %q and %q overlap" $existingRange.name $pool.name) -}}
+{{- end -}}
+{{- end -}}
+{{- $relayRanges = append $relayRanges (dict "name" $pool.name "min" $pool.relayPortMin "max" $pool.relayPortMax) -}}
+{{- end -}}
+{{- range $pool := $coturnPools }}
+{{- if ne $pool.suffix "" }}
+---
+{{- end }}
+{{- with $ }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "flow.fullname" . }}-coturn
+  name: {{ include "flow.fullname" . }}-coturn{{ $pool.suffix }}
   labels:
     {{- include "flow.labels" . | nindent 4 }}
     app.kubernetes.io/component: coturn
+    flow.heterocloud.io/turn-pool: {{ $pool.name }}
 spec:
-  replicas: {{ .Values.coturn.replicaCount }}
+  replicas: {{ $pool.replicaCount }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -51,11 +106,13 @@ spec:
     matchLabels:
       {{- include "flow.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: coturn
+      flow.heterocloud.io/turn-pool: {{ $pool.name }}
   template:
     metadata:
       labels:
         {{- include "flow.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: coturn
+        flow.heterocloud.io/turn-pool: {{ $pool.name }}
         networking.heteronetwork.io/traffic-mode: direct
       {{- with .Values.podAnnotations }}
       annotations:
@@ -67,7 +124,14 @@ spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       topologySpreadConstraints:
-        {{- include "flow.topologySpread" (dict "root" . "component" "coturn") | nindent 8 }}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              {{- include "flow.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: coturn
+              flow.heterocloud.io/turn-pool: {{ $pool.name }}
       affinity:
         {{- if $relayAddressMappings }}
         nodeAffinity:
@@ -88,6 +152,7 @@ spec:
                 matchLabels:
                   {{- include "flow.selectorLabels" . | nindent 18 }}
                   app.kubernetes.io/component: coturn
+                  flow.heterocloud.io/turn-pool: {{ $pool.name }}
       terminationGracePeriodSeconds: 30
       containers:
         - name: coturn
@@ -105,9 +170,9 @@ spec:
                 "--static-auth-secret=${TURN_SHARED_SECRET}" \
                 --userdb=/tmp/turndb \
                 --realm={{ .Values.coturn.realm | quote }} \
-                --listening-port={{ .Values.coturn.servicePort }} \
-                --min-port={{ .Values.coturn.relayPortMin }} \
-                --max-port={{ .Values.coturn.relayPortMax }} \
+                --listening-port={{ $pool.servicePort }} \
+                --min-port={{ $pool.relayPortMin }} \
+                --max-port={{ $pool.relayPortMax }} \
                 --stale-nonce=600 \
                 --no-tls \
                 --no-dtls \
@@ -116,7 +181,7 @@ spec:
                 --no-dynamic-realms \
                 --no-multicast-peers \
                 --prometheus \
-                --prometheus-port={{ .Values.coturn.metrics.port }} \
+                --prometheus-port={{ $pool.metricsPort }} \
                 --prometheus-username-labels
 
               if [ "${TURN_RELAY_ADDRESS_MODE}" != host ]; then
@@ -192,15 +257,15 @@ spec:
               value: {{ join "," $relayAddressMappingArgs | quote }}
           ports:
             - name: turn-tcp
-              containerPort: {{ .Values.coturn.servicePort }}
-              hostPort: {{ .Values.coturn.servicePort }}
+              containerPort: {{ $pool.servicePort }}
+              hostPort: {{ $pool.servicePort }}
               protocol: TCP
             - name: turn-udp
-              containerPort: {{ .Values.coturn.servicePort }}
-              hostPort: {{ .Values.coturn.servicePort }}
+              containerPort: {{ $pool.servicePort }}
+              hostPort: {{ $pool.servicePort }}
               protocol: UDP
             - name: metrics
-              containerPort: {{ .Values.coturn.metrics.port }}
+              containerPort: {{ $pool.metricsPort }}
               protocol: TCP
           readinessProbe:
             tcpSocket:
@@ -245,10 +310,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "flow.fullname" . }}-turn
+  name: {{ include "flow.fullname" . }}-turn{{ $pool.suffix }}
   labels:
     {{- include "flow.labels" . | nindent 4 }}
     app.kubernetes.io/component: coturn
+    flow.heterocloud.io/turn-pool: {{ $pool.name }}
   annotations:
     networking.heteronetwork.io/traffic-mode: "direct"
     {{- with .Values.coturn.annotations }}
@@ -262,31 +328,36 @@ spec:
   selector:
     {{- include "flow.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: coturn
+    flow.heterocloud.io/turn-pool: {{ $pool.name }}
   ports:
     - name: turn-udp
-      port: {{ .Values.coturn.servicePort }}
+      port: {{ $pool.servicePort }}
       targetPort: turn-udp
       protocol: UDP
     - name: turn-tcp
-      port: {{ .Values.coturn.servicePort }}
+      port: {{ $pool.servicePort }}
       targetPort: turn-tcp
       protocol: TCP
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "flow.fullname" . }}-coturn-metrics
+  name: {{ include "flow.fullname" . }}-coturn{{ $pool.suffix }}-metrics
   labels:
     {{- include "flow.labels" . | nindent 4 }}
     app.kubernetes.io/component: coturn
+    flow.heterocloud.io/turn-pool: {{ $pool.name }}
 spec:
   type: ClusterIP
   selector:
     {{- include "flow.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: coturn
+    flow.heterocloud.io/turn-pool: {{ $pool.name }}
   ports:
     - name: metrics
-      port: {{ .Values.coturn.metrics.port }}
+      port: {{ $pool.metricsPort }}
       targetPort: metrics
       protocol: TCP
       appProtocol: http
+{{- end }}
+{{- end }}

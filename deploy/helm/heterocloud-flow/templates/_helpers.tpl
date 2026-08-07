@@ -112,6 +112,10 @@ podAntiAffinity:
 {{- range $host := .Values.coturn.publicHosts -}}
 {{- $urls = append $urls (printf "turn:%s:%v?transport=udp" $host $root.Values.coturn.servicePort) -}}
 {{- $urls = append $urls (printf "turn:%s:%v?transport=tcp" $host $root.Values.coturn.servicePort) -}}
+{{- range $pool := $root.Values.coturn.additionalPools -}}
+{{- $urls = append $urls (printf "turn:%s:%v?transport=udp" $host $pool.servicePort) -}}
+{{- $urls = append $urls (printf "turn:%s:%v?transport=tcp" $host $pool.servicePort) -}}
+{{- end -}}
 {{- end -}}
 {{- join "," $urls -}}
 {{- end }}

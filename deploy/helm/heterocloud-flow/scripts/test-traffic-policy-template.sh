@@ -27,8 +27,8 @@ grep -q 'externalTrafficPolicy: Local' "$tmp_dir/coturn.yaml"
 
 test "$(grep -c 'networking.heteronetwork.io/traffic-mode: direct' "$tmp_dir/test.yaml")" -eq 1
 test "$(grep -c 'networking.heteronetwork.io/traffic-mode: "direct"' "$tmp_dir/test.yaml")" -eq 1
-test "$(grep -c 'networking.heteronetwork.io/traffic-mode: direct' "$tmp_dir/heteronet.yaml")" -eq 1
-test "$(grep -c 'networking.heteronetwork.io/traffic-mode: "direct"' "$tmp_dir/heteronet.yaml")" -eq 1
+test "$(grep -c 'networking.heteronetwork.io/traffic-mode: direct' "$tmp_dir/heteronet.yaml")" -eq 2
+test "$(grep -c 'networking.heteronetwork.io/traffic-mode: "direct"' "$tmp_dir/heteronet.yaml")" -eq 2
 test "$(grep -c 'networking.heteronetwork.io/traffic-mode: "forwarded"' "$tmp_dir/heteronet.yaml")" -eq 6
 test "$(grep -c 'externalTrafficPolicy: Cluster' "$tmp_dir/heteronet.yaml")" -eq 6
 test "$(grep -c 'loadBalancerSourceRanges:' "$tmp_dir/heteronet.yaml")" -eq 5
@@ -40,6 +40,7 @@ grep -q 'allow_tcp_fallback: true' "$tmp_dir/test.yaml"
 grep -q 'allow_tcp_fallback: true' "$tmp_dir/heteronet.yaml"
 grep -q '"turn-a.example.test:3478"' "$tmp_dir/test.yaml"
 grep -q '"flow.heterocloud.mizuame.app:3478"' "$tmp_dir/heteronet.yaml"
+grep -q 'turn:flow.heterocloud.mizuame.app:3479?transport=udp' "$tmp_dir/heteronet.yaml"
 ! grep -q 'use_external_ip: false' "$tmp_dir/test.yaml"
 ! grep -q 'use_external_ip: false' "$tmp_dir/heteronet.yaml"
 
