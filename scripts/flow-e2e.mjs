@@ -10,6 +10,7 @@ const durationSeconds = numberEnv("FLOW_DURATION_SECONDS", 600, 10, 86_400);
 const intervalSeconds = numberEnv("FLOW_INTERVAL_SECONDS", 30, 5, 3_600);
 const requestTimeoutMs = numberEnv("FLOW_REQUEST_TIMEOUT_MS", 30_000, 1_000, 120_000);
 const playwrightModule = process.env.PLAYWRIGHT_MODULE || "playwright";
+const hostResolverRules = process.env.FLOW_HOST_RESOLVER_RULES || "";
 
 const { chromium } = createRequire(import.meta.url)(playwrightModule);
 
@@ -147,6 +148,7 @@ async function connectPeers(pageA, pageB, connectionA, connectionB, headers) {
           rejectResult = reject;
         });
         let settled = false;
+        let finishing = false;
         let timeout;
 
         const fail = (error) => {
@@ -191,16 +193,18 @@ async function connectPeers(pageA, pageB, connectionA, connectionB, headers) {
         };
 
         const finish = async (value) => {
-          if (settled) return;
-          settled = true;
+          if (settled || finishing) return;
+          finishing = true;
           clearTimeout(timeout);
           let stats;
           try {
             stats = await connectionStats();
           } catch (error) {
+            finishing = false;
             fail(error);
             return;
           }
+          settled = true;
           socket.close();
           peerConnection.close();
           resolveResult({ ...value, stats });
@@ -343,7 +347,8 @@ async function connectPeers(pageA, pageB, connectionA, connectionB, headers) {
   return Promise.all([first, second]);
 }
 
-const browser = await chromium.launch({ headless: true });
+const chromiumArgs = hostResolverRules ? [`--host-resolver-rules=${hostResolverRules}`] : [];
+const browser = await chromium.launch({ headless: true, args: chromiumArgs });
 try {
   await requestWithRetry("/health/live", "GET", {});
   const openapi = await requestWithRetry("/openapi.json", "GET", {});
