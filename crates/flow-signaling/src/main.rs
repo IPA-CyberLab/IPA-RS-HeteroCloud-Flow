@@ -35,7 +35,7 @@ use flow_domain::{
 use flow_rate_limit::{
     IpRateLimiter, RateLimitDecision, RateLimitPolicy, RedisBackend, TrustedProxies,
 };
-use flow_store::PgStore;
+use flow_store::{PgStore, database_url_with_proxy};
 use futures_util::{SinkExt, StreamExt};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -916,7 +916,12 @@ impl Config {
         )?;
         Ok(Self {
             bind_addr: parse_or("FLOW_SIGNALING_BIND_ADDR", "0.0.0.0:8082")?,
-            database_url: required("DATABASE_URL")?,
+            database_url: database_url_with_proxy(
+                &required("DATABASE_URL")?,
+                env::var("DATABASE_PROXY_HOST").ok().as_deref(),
+                env::var("DATABASE_PROXY_PORT").ok().as_deref(),
+            )
+            .context("invalid PostgreSQL proxy configuration")?,
             database_max_connections: parse_or("DATABASE_MAX_CONNECTIONS", "20")?,
             migrate_on_start: parse_or("MIGRATE_ON_START", "false")?,
             principal_auth,

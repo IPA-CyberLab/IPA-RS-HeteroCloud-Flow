@@ -67,6 +67,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "flow.secretName" . }}
                   key: database-url
+            {{- include "flow.databaseProxyEnv" . | nindent 12 }}
             - name: DATABASE_MAX_CONNECTIONS
               value: {{ .Values.database.maxConnections.signaling | quote }}
             - name: MIGRATE_ON_START

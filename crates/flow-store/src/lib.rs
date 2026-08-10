@@ -24,6 +24,44 @@ pub struct PgStore {
     pool: PgPool,
 }
 
+/// Replaces the host and port of the externally supplied PostgreSQL URL when
+/// a Pod-network database proxy is configured. Credentials and TLS parameters
+/// remain in the Secret-provided URL.
+pub fn database_url_with_proxy(
+    database_url: &str,
+    proxy_host: Option<&str>,
+    proxy_port: Option<&str>,
+) -> Result<String, StoreError> {
+    if proxy_host.is_none() && proxy_port.is_none() {
+        return Ok(database_url.to_string());
+    }
+    let Some(proxy_host) = proxy_host.filter(|host| !host.is_empty()) else {
+        return Err(StoreError::Configuration(
+            "DATABASE_PROXY_HOST is required when database proxying is enabled",
+        ));
+    };
+    let Some(proxy_port) = proxy_port else {
+        return Err(StoreError::Configuration(
+            "DATABASE_PROXY_PORT is required when database proxying is enabled",
+        ));
+    };
+    let proxy_port = proxy_port
+        .parse::<u16>()
+        .map_err(|_| StoreError::Configuration("DATABASE_PROXY_PORT is invalid"))?;
+    if proxy_port == 0 {
+        return Err(StoreError::Configuration(
+            "DATABASE_PROXY_PORT must be non-zero",
+        ));
+    }
+    let mut url = url::Url::parse(database_url)
+        .map_err(|_| StoreError::Configuration("DATABASE_URL is invalid"))?;
+    url.set_host(Some(proxy_host))
+        .map_err(|_| StoreError::Configuration("DATABASE_PROXY_HOST is invalid"))?;
+    url.set_port(Some(proxy_port))
+        .map_err(|_| StoreError::Configuration("DATABASE_PROXY_PORT is invalid"))?;
+    Ok(url.to_string())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceOverviewSnapshot {
     pub active_rooms: u64,
@@ -2315,4 +2353,37 @@ pub enum StoreError {
     Database(#[from] sqlx::Error),
     #[error(transparent)]
     Migration(#[from] sqlx::migrate::MigrateError),
+}
+
+#[cfg(test)]
+mod database_url_tests {
+    use super::database_url_with_proxy;
+
+    #[test]
+    fn preserves_credentials_and_query_parameters_when_proxying() {
+        let result = database_url_with_proxy(
+            "postgresql://flow:secret@127.0.0.1:25432/flow?sslmode=require",
+            Some("flow-postgres-proxy.flow.svc.cluster.local"),
+            Some("55432"),
+        )
+        .expect("proxy URL should be valid");
+        assert_eq!(
+            result,
+            "postgresql://flow:secret@flow-postgres-proxy.flow.svc.cluster.local:55432/flow?sslmode=require"
+        );
+    }
+
+    #[test]
+    fn leaves_the_secret_url_unchanged_without_proxy_settings() {
+        let url = "postgresql://flow:secret@127.0.0.1:25432/flow?sslmode=require";
+        assert_eq!(database_url_with_proxy(url, None, None).unwrap(), url);
+    }
+
+    #[test]
+    fn rejects_partial_proxy_settings() {
+        assert!(
+            database_url_with_proxy("postgresql://flow@127.0.0.1/flow", Some("proxy"), None)
+                .is_err()
+        );
+    }
 }

@@ -10,7 +10,7 @@ use flow_domain::{
     ROOM_ACTIVITY_CHECK_INTERVAL, ROOM_IDLE_TIMEOUT, SIGNALING_CONNECTION_STALE_AFTER, SessionMode,
 };
 use flow_livekit::LiveKitClient;
-use flow_store::PgStore;
+use flow_store::{PgStore, database_url_with_proxy};
 use serde_json::json;
 use tokio::{net::TcpListener, sync::watch, task::JoinHandle};
 use tower_http::trace::TraceLayer;
@@ -408,7 +408,12 @@ impl Config {
         }
         Ok(Self {
             bind_addr: parse_or("FLOW_MATCHMAKER_BIND_ADDR", "0.0.0.0:8081")?,
-            database_url: required("DATABASE_URL")?,
+            database_url: database_url_with_proxy(
+                &required("DATABASE_URL")?,
+                env::var("DATABASE_PROXY_HOST").ok().as_deref(),
+                env::var("DATABASE_PROXY_PORT").ok().as_deref(),
+            )
+            .context("invalid PostgreSQL proxy configuration")?,
             database_max_connections: parse_or("DATABASE_MAX_CONNECTIONS", "10")?,
             migrate_on_start: parse_or("MIGRATE_ON_START", "false")?,
             livekit: LiveKitClient::new(

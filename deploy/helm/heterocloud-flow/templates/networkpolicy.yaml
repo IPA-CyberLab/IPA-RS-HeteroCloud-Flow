@@ -71,6 +71,16 @@ spec:
           protocol: TCP
         - port: {{ $.Values.coturn.metrics.port }}
           protocol: TCP
+    {{- if $.Values.database.proxy.enabled }}
+    {{- range $.Values.database.proxy.addresses }}
+    - to:
+        - ipBlock:
+            cidr: {{ . }}/32
+      ports:
+        - port: {{ $.Values.database.proxy.port }}
+          protocol: TCP
+    {{- end }}
+    {{- end }}
     {{- range .Values.networkPolicy.externalEgressCidrs }}
     - to:
         - ipBlock:

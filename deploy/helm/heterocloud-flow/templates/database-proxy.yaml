@@ -1,0 +1,42 @@
+{{- if .Values.database.proxy.enabled }}
+{{- if not (gt (len .Values.database.proxy.addresses) 0) }}
+{{- fail "database.proxy.addresses must contain at least one IPv4 address when database.proxy.enabled=true" }}
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flow.fullname" . }}-postgres-proxy
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database-proxy
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: {{ .Values.database.proxy.port }}
+      targetPort: {{ .Values.database.proxy.port }}
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: {{ include "flow.fullname" . }}-postgres-proxy
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database-proxy
+    kubernetes.io/service-name: {{ include "flow.fullname" . }}-postgres-proxy
+addressType: IPv4
+ports:
+  - name: postgres
+    port: {{ .Values.database.proxy.port }}
+    protocol: TCP
+endpoints:
+  {{- range .Values.database.proxy.addresses }}
+  - addresses:
+      - {{ . | quote }}
+    conditions:
+      ready: true
+      serving: true
+      terminating: false
+  {{- end }}
+{{- end }}

@@ -47,6 +47,10 @@ rateLimit:
 
 database:
   externalPort: 5432
+  proxy:
+    enabled: false
+    port: 5432
+    addresses: []
   # Select nodes where a node-local database endpoint is available. This is
   # merged with the global nodeSelector for every database client workload.
   nodeSelector: {}

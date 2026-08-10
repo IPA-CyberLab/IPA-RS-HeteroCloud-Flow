@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use flow_auth::{PrincipalAuthenticator, ProviderAuthenticator};
 use flow_livekit::LiveKitClient;
 use flow_rate_limit::{RateLimitPolicy, RedisBackend, TrustedProxies};
+use flow_store::database_url_with_proxy;
 use flow_turn::TurnCredentialIssuer;
 use url::Url;
 
@@ -32,7 +33,15 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Result<Self> {
         let bind_addr = parse_or("FLOW_API_BIND_ADDR", "0.0.0.0:8080")?;
-        let database_url = required("DATABASE_URL")?;
+        let database_url_raw = required("DATABASE_URL")?;
+        let database_proxy_host = env::var("DATABASE_PROXY_HOST").ok();
+        let database_proxy_port = env::var("DATABASE_PROXY_PORT").ok();
+        let database_url = database_url_with_proxy(
+            &database_url_raw,
+            database_proxy_host.as_deref(),
+            database_proxy_port.as_deref(),
+        )
+        .context("invalid PostgreSQL proxy configuration")?;
         let database_max_connections = parse_or("DATABASE_MAX_CONNECTIONS", "20")?;
         let migrate_on_start = parse_or("MIGRATE_ON_START", "true")?;
         let max_auth_ttl_seconds = parse_or("FLOW_PRINCIPAL_MAX_TTL_SECONDS", "300")?;

@@ -77,6 +77,19 @@ app.kubernetes.io/part-of: heterocloud-flow
 {{- end -}}
 {{- end }}
 
+{{- define "flow.databaseProxyHost" -}}
+{{- printf "%s-postgres-proxy.%s.svc.cluster.local" (include "flow.fullname" .) .Release.Namespace -}}
+{{- end }}
+
+{{- define "flow.databaseProxyEnv" -}}
+{{- if .Values.database.proxy.enabled }}
+- name: DATABASE_PROXY_HOST
+  value: {{ include "flow.databaseProxyHost" . | quote }}
+- name: DATABASE_PROXY_PORT
+  value: {{ .Values.database.proxy.port | quote }}
+{{- end }}
+{{- end }}
+
 {{- define "flow.rustSecurityContext" -}}
 allowPrivilegeEscalation: false
 capabilities:

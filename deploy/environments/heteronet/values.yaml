@@ -35,6 +35,16 @@ database:
   # Database clients run only where the node-local PostgreSQL HAProxy is ready.
   # Media and monitoring workloads remain eligible on every Kubernetes node.
   externalPort: 25432
+  # Pod-network workloads use the VPN-bound HAProxy listeners through a
+  # selector-free Service. The Secret can continue to contain the legacy
+  # 127.0.0.1:25432 URL; Flow rewrites only its host and port at startup.
+  proxy:
+    enabled: true
+    port: 55432
+    addresses:
+      - 10.250.0.4
+      - 10.250.0.5
+      - 10.250.0.6
   nodeSelector:
     database.heteronetwork.io/proxy-ready: "true"
   maxConnections:

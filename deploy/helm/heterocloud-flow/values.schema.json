@@ -83,6 +83,22 @@
           "minimum": 1,
           "maximum": 65535
         },
+        "proxy": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "addresses": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 7, "maxLength": 45}
+            }
+          }
+        },
         "nodeSelector": {
           "type": "object",
           "additionalProperties": {"type": "string"}

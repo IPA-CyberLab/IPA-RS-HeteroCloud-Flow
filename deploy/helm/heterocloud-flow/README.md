@@ -76,8 +76,9 @@ The checked-in overlay uses the unified `flow.heterocloud.mizuame.app` public
 name. Its multi-address A record must contain every public ingress node. The
 overlay sets:
 
-- `hostNetwork: true` and `ClusterFirstWithHostNet` for API, matchmaker, and
-  signaling; LiveKit and coturn are host-network media pods as well
+- API, matchmaker, and signaling stay on the Pod network and use forwarded
+  Services; only coturn uses direct host networking. LiveKit also stays on the
+  Pod network and is reached through the forwarded public gateway.
 - five replicas of each forwarded workload; database clients select nodes with
   `database.heteronetwork.io/proxy-ready=true`, while LiveKit and Prometheus
   spread across every Kubernetes node; coturn alone is selected onto the three
@@ -85,7 +86,10 @@ overlay sets:
 - explicit coturn `direct-public` relay addressing; each VPN `status.hostIP`
   selects a public IPv4 address that is locally assigned on the same host, and
   coturn binds its relay socket directly to that public address
-- node-local PostgreSQL URL at `127.0.0.1:25432`
+- node-local PostgreSQL HAProxy is exposed through a selector-free Kubernetes
+  Service on the VPN addresses and port `55432`; Flow rewrites only the host
+  and port of the Secret-provided URL at startup, leaving credentials and TLS
+  parameters outside Helm values
 - pools of API `6 x 5`, matchmaker `3 x 5`, signaling `4 x 5`: 65 steady-state
   maximum connections
 - API startup migrations enabled and the standalone migration Job disabled, so
