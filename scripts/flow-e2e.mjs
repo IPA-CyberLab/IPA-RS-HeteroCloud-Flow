@@ -11,6 +11,7 @@ const intervalSeconds = numberEnv("FLOW_INTERVAL_SECONDS", 30, 5, 3_600);
 const requestTimeoutMs = numberEnv("FLOW_REQUEST_TIMEOUT_MS", 30_000, 1_000, 120_000);
 const playwrightModule = process.env.PLAYWRIGHT_MODULE || "playwright";
 const hostResolverRules = process.env.FLOW_HOST_RESOLVER_RULES || "";
+const iceTransportPolicy = process.env.FLOW_ICE_TRANSPORT_POLICY === "relay" ? "relay" : "all";
 
 const { chromium } = createRequire(import.meta.url)(playwrightModule);
 
@@ -125,7 +126,7 @@ async function requestWithRetry(path, method, headers, body) {
 async function connectPeers(pageA, pageB, connectionA, connectionB, headers) {
   const startPeer = async (page, connection, offerer, label) =>
     page.evaluate(
-      async ({ connection, headers, offerer, label }) => {
+      async ({ connection, headers, offerer, label, iceTransportPolicy }) => {
         const iceServers = connection.ice?.ice_servers || [];
         if (!iceServers.some((server) => server.urls?.some((url) => String(url).startsWith("stun:")))) {
           throw new Error("join response did not include a STUN server");
@@ -134,7 +135,7 @@ async function connectPeers(pageA, pageB, connectionA, connectionB, headers) {
           throw new Error("join response did not include a TURN server");
         }
 
-        const peerConnection = new RTCPeerConnection({ iceServers });
+        const peerConnection = new RTCPeerConnection({ iceServers, iceTransportPolicy });
         const socket = new WebSocket(connection.urls[0]);
         const pendingCandidates = [];
         let remoteDescriptionSet = false;
@@ -161,9 +162,22 @@ async function connectPeers(pageA, pageB, connectionA, connectionB, headers) {
         };
 
         const connectionStats = async () => {
+          let lastCandidatePairs = [];
+          let lastReportTypes = [];
           for (let attempt = 0; attempt < 30; attempt += 1) {
             const reports = new Map();
-            for (const report of await peerConnection.getStats()) reports.set(report.id, report);
+            const statsReport = await peerConnection.getStats();
+            for (const report of statsReport.values()) reports.set(report.id, report);
+            lastReportTypes = [...new Set([...reports.values()].map((report) => report.type))];
+            lastCandidatePairs = [...reports.values()]
+              .filter((report) => report.type === "candidate-pair")
+              .map((report) => ({
+                state: report.state,
+                nominated: report.nominated || false,
+                selected: report.selected || false,
+                local_candidate_id: report.localCandidateId || null,
+                remote_candidate_id: report.remoteCandidateId || null,
+              }));
             const transport = [...reports.values()].find(
               (report) => report.type === "transport" && report.selectedCandidatePairId,
             );
@@ -189,7 +203,12 @@ async function connectPeers(pageA, pageB, connectionA, connectionB, headers) {
             }
             await new Promise((resolve) => setTimeout(resolve, 100));
           }
-          throw new Error("WebRTC selected candidate pair was not reported");
+          throw new Error(
+            `WebRTC selected candidate pair was not reported: ${JSON.stringify({
+              candidate_pairs: lastCandidatePairs,
+              report_types: lastReportTypes,
+            })}`,
+          );
         };
 
         const finish = async (value) => {
@@ -338,7 +357,7 @@ async function connectPeers(pageA, pageB, connectionA, connectionB, headers) {
         };
         return result;
       },
-      { connection, headers, offerer, label },
+      { connection, headers, offerer, label, iceTransportPolicy },
     );
 
   const first = startPeer(pageA, connectionA, true, "peer-a");
