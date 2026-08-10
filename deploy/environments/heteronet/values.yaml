@@ -22,10 +22,10 @@ rateLimit:
   requestsPerSecond: 1000
   burst: 5000
   trustedProxyCidrs:
-    - 10.250.0.4/32
     - 10.250.0.5/32
     - 10.250.0.6/32
-    - 163.220.236.51/32
+    - 10.250.0.8/32
+    - 163.220.236.45/32
     - 163.220.236.52/32
     - 163.220.236.53/32
     - 127.0.0.0/8
@@ -60,7 +60,7 @@ api:
     annotations:
       networking.heteronetwork.io/ingress-replicas: "3"
     loadBalancerSourceRanges:
-      - 163.220.236.51/32
+      - 163.220.236.45/32
       - 163.220.236.52/32
       - 163.220.236.53/32
 
@@ -77,7 +77,7 @@ signaling:
     annotations:
       networking.heteronetwork.io/ingress-replicas: "3"
     loadBalancerSourceRanges:
-      - 163.220.236.51/32
+      - 163.220.236.45/32
       - 163.220.236.52/32
       - 163.220.236.53/32
 
@@ -95,14 +95,13 @@ livekit:
       annotations:
         networking.heteronetwork.io/ingress-replicas: "3"
       loadBalancerSourceRanges:
-        - 163.220.236.51/32
+        - 163.220.236.45/32
         - 163.220.236.52/32
         - 163.220.236.53/32
   metrics:
     urls:
       - http://10.250.0.2:6789/metrics
       - http://10.250.0.3:6789/metrics
-      - http://10.250.0.4:6789/metrics
       - http://10.250.0.5:6789/metrics
       - http://10.250.0.6:6789/metrics
       - http://10.250.0.8:6789/metrics
@@ -132,9 +131,9 @@ coturn:
     # These public addresses are local host interfaces, not NAT mappings.
     mode: direct-public
     mappings:
-      - nodeName: uc-k8sp1
-        publicIp: 163.220.236.51
-        privateIp: 10.250.0.4
+      - nodeName: uc-k8sv1
+        publicIp: 163.220.236.45
+        privateIp: 10.250.0.8
       - nodeName: uc-k8sp2
         publicIp: 163.220.236.52
         privateIp: 10.250.0.5
@@ -143,12 +142,12 @@ coturn:
         privateIp: 10.250.0.6
   metrics:
     urls:
-      - http://10.250.0.4:9641/metrics
       - http://10.250.0.5:9641/metrics
       - http://10.250.0.6:9641/metrics
-      - http://10.250.0.4:9642/metrics
+      - http://10.250.0.8:9641/metrics
       - http://10.250.0.5:9642/metrics
       - http://10.250.0.6:9642/metrics
+      - http://10.250.0.8:9642/metrics
   resources:
     requests:
       cpu: 250m
