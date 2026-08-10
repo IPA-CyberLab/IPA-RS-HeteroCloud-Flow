@@ -138,8 +138,9 @@ coturn:
   publicHosts:
     - flow.heterocloud.mizuame.app
   relayAddress:
-    # These public addresses are local host interfaces, not NAT mappings.
-    mode: direct-public
+    # uc-k8sv1 is behind DNAT; coturn relays on the VPN interface and
+    # advertises the corresponding public address to ICE clients.
+    mode: one-to-one-nat
     mappings:
       - nodeName: uc-k8sv1
         publicIp: 163.220.236.45
