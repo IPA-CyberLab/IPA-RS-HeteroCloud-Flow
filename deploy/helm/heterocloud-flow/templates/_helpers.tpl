@@ -55,15 +55,8 @@ app.kubernetes.io/part-of: heterocloud-flow
 
 {{- define "flow.redisSentinelUrls" -}}
 {{- if .Values.redis.enabled -}}
-{{- $root := . -}}
-{{- $fullname := .Values.redis.fullnameOverride -}}
-{{- $headless := printf "%s-headless" $fullname -}}
-{{- $replicas := int .Values.redis.replica.replicaCount -}}
-{{- $urls := list -}}
-{{- range $index := until $replicas -}}
-{{- $urls = append $urls (printf "redis://%s-node-%d.%s.%s.svc.cluster.local:26379" $fullname $index $headless $root.Release.Namespace) -}}
-{{- end -}}
-{{ join "," $urls }}
+{{- /* Use the Service so failed StatefulSet members are removed from discovery. */ -}}
+{{- printf "redis://%s.%s.svc.cluster.local:26379" .Values.redis.fullnameOverride .Release.Namespace -}}
 {{- else -}}
 {{ join "," .Values.externalRedis.sentinelUrls }}
 {{- end -}}
