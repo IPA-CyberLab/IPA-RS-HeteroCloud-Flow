@@ -24,7 +24,7 @@ pub struct PgStore {
     pool: PgPool,
 }
 
-/// Replaces the host and port of the externally supplied PostgreSQL URL when
+/// Replaces the host and port of the externally supplied `PostgreSQL` URL when
 /// a Pod-network database proxy is configured. Credentials and TLS parameters
 /// remain in the Secret-provided URL.
 pub fn database_url_with_proxy(
@@ -58,7 +58,7 @@ pub fn database_url_with_proxy(
     url.set_host(Some(proxy_host))
         .map_err(|_| StoreError::Configuration("DATABASE_PROXY_HOST is invalid"))?;
     url.set_port(Some(proxy_port))
-        .map_err(|_| StoreError::Configuration("DATABASE_PROXY_PORT is invalid"))?;
+        .map_err(|()| StoreError::Configuration("DATABASE_PROXY_PORT is invalid"))?;
     Ok(url.to_string())
 }
 
