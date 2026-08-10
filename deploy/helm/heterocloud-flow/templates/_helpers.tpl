@@ -106,12 +106,14 @@ seccompProfile:
 
 {{- define "flow.requiredPodAntiAffinity" -}}
 podAntiAffinity:
-  requiredDuringSchedulingIgnoredDuringExecution:
-    - topologyKey: kubernetes.io/hostname
-      labelSelector:
-        matchLabels:
-          {{- include "flow.selectorLabels" .root | nindent 10 }}
-          app.kubernetes.io/component: {{ .component }}
+  preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        topologyKey: kubernetes.io/hostname
+        labelSelector:
+          matchLabels:
+            {{- include "flow.selectorLabels" .root | nindent 12 }}
+            app.kubernetes.io/component: {{ .component }}
 {{- end }}
 
 {{- define "flow.turnUrls" -}}

@@ -1,5 +1,7 @@
 runtime:
-  hostNetwork: true
+  # Only coturn uses hostNetwork/direct mode. Control, signaling, SFU, and
+  # matchmaker workloads stay on the Pod network and use forwarded Services.
+  hostNetwork: false
 
 # Forwarded workloads are eligible on every Kubernetes node. coturn has its own
 # public-ingress selector because it is the only direct workload.
@@ -83,7 +85,7 @@ livekit:
   replicaCount: 6
   image:
     repository: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-livekit
-    tag: "0.1.16"
+    tag: "0.1.17"
   publicUrls:
     - wss://flow.heterocloud.mizuame.app
   signal:

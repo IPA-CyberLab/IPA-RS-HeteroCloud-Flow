@@ -31,8 +31,10 @@ spec:
     spec:
       serviceAccountName: {{ include "flow.serviceAccountName" . }}
       automountServiceAccountToken: false
+      {{- if .Values.runtime.hostNetwork }}
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -62,12 +64,14 @@ spec:
             - --key-file
             - /etc/livekit-keys/livekit-keys.yaml
             - --bind
-            - $(FLOW_HOST_IP)
+            - {{ if .Values.runtime.hostNetwork }}$(FLOW_HOST_IP){{ else }}0.0.0.0{{ end }}
+          {{- if .Values.runtime.hostNetwork }}
           env:
             - name: FLOW_HOST_IP
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
+          {{- end }}
           ports:
             - name: signal
               containerPort: 7880
@@ -77,11 +81,15 @@ spec:
               protocol: TCP
             - name: rtc-tcp
               containerPort: {{ .Values.livekit.rtc.tcpPort }}
+              {{- if .Values.runtime.hostNetwork }}
               hostPort: {{ .Values.livekit.rtc.tcpPort }}
+              {{- end }}
               protocol: TCP
             - name: rtc-udp
               containerPort: {{ .Values.livekit.rtc.udpPort }}
+              {{- if .Values.runtime.hostNetwork }}
               hostPort: {{ .Values.livekit.rtc.udpPort }}
+              {{- end }}
               protocol: UDP
           readinessProbe:
             httpGet:
