@@ -159,24 +159,35 @@ async function connectPeers(pageA, pageB, connectionA, connectionB, headers) {
         };
 
         const connectionStats = async () => {
-          const reports = new Map();
-          for (const report of await peerConnection.getStats()) reports.set(report.id, report);
-          const pair = [...reports.values()].find(
-            (report) => report.type === "candidate-pair" &&
-              (report.selected || report.nominated || report.state === "succeeded"),
-          );
-          const local = pair ? reports.get(pair.localCandidateId) : undefined;
-          const remote = pair ? reports.get(pair.remoteCandidateId) : undefined;
-          return {
-            selected_candidate_pair: pair ? {
-              state: pair.state,
-              local_candidate_type: local?.candidateType || null,
-              remote_candidate_type: remote?.candidateType || null,
-              current_round_trip_time: pair.currentRoundTripTime || null,
-              bytes_sent: pair.bytesSent || 0,
-              bytes_received: pair.bytesReceived || 0,
-            } : null,
-          };
+          for (let attempt = 0; attempt < 30; attempt += 1) {
+            const reports = new Map();
+            for (const report of await peerConnection.getStats()) reports.set(report.id, report);
+            const transport = [...reports.values()].find(
+              (report) => report.type === "transport" && report.selectedCandidatePairId,
+            );
+            const pair = transport
+              ? reports.get(transport.selectedCandidatePairId)
+              : [...reports.values()].find(
+                  (report) => report.type === "candidate-pair" &&
+                    (report.selected || report.nominated || report.state === "succeeded"),
+                );
+            if (pair?.localCandidateId && pair.remoteCandidateId) {
+              const local = reports.get(pair.localCandidateId);
+              const remote = reports.get(pair.remoteCandidateId);
+              return {
+                selected_candidate_pair: {
+                  state: pair.state,
+                  local_candidate_type: local?.candidateType || null,
+                  remote_candidate_type: remote?.candidateType || null,
+                  current_round_trip_time: pair.currentRoundTripTime || null,
+                  bytes_sent: pair.bytesSent || 0,
+                  bytes_received: pair.bytesReceived || 0,
+                },
+              };
+            }
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          throw new Error("WebRTC selected candidate pair was not reported");
         };
 
         const finish = async (value) => {
@@ -187,7 +198,8 @@ async function connectPeers(pageA, pageB, connectionA, connectionB, headers) {
           try {
             stats = await connectionStats();
           } catch (error) {
-            stats = { stats_error: String(error) };
+            fail(error);
+            return;
           }
           socket.close();
           peerConnection.close();
