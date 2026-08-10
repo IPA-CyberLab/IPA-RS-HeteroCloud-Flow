@@ -24,6 +24,10 @@ const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 const REDIS_RETRY_ATTEMPTS: usize = 3;
 const REDIS_RETRY_BACKOFF: Duration = Duration::from_millis(100);
 
+fn redis_retry_delay(attempt: usize) -> Duration {
+    REDIS_RETRY_BACKOFF * u32::try_from(attempt + 1).expect("Redis retry attempt count fits in u32")
+}
+
 const TOKEN_BUCKET_SCRIPT: &str = r"
 local rate = tonumber(ARGV[1])
 local capacity = tonumber(ARGV[2])
@@ -161,7 +165,7 @@ impl RedisBackend {
                         %error,
                         "Redis Sentinel master resolution failed; retrying"
                     );
-                    sleep(REDIS_RETRY_BACKOFF * (attempt as u32 + 1)).await;
+                    sleep(redis_retry_delay(attempt)).await;
                 }
                 Err(error) => return Err(error).context("resolve Redis master"),
             }
@@ -300,7 +304,7 @@ impl IpRateLimiter {
                         %error,
                         "rate-limit Redis connection failed; retrying"
                     );
-                    sleep(REDIS_RETRY_BACKOFF * (attempt as u32 + 1)).await;
+                    sleep(redis_retry_delay(attempt)).await;
                     continue;
                 }
                 Err(error) => return Err(error).context("connect to rate-limit Redis primary"),
@@ -323,7 +327,7 @@ impl IpRateLimiter {
                 }
                 Err(_) if attempt + 1 < REDIS_RETRY_ATTEMPTS => {
                     self.invalidate_connection().await;
-                    sleep(REDIS_RETRY_BACKOFF * (attempt as u32 + 1)).await;
+                    sleep(redis_retry_delay(attempt)).await;
                 }
                 Err(error) => return Err(error).context("apply Redis IP rate limit"),
             }
@@ -341,7 +345,7 @@ impl IpRateLimiter {
             let mut connection = match self.connection().await {
                 Ok(connection) => connection,
                 Err(_error) if attempt + 1 < REDIS_RETRY_ATTEMPTS => {
-                    sleep(REDIS_RETRY_BACKOFF * (attempt as u32 + 1)).await;
+                    sleep(redis_retry_delay(attempt)).await;
                     continue;
                 }
                 Err(error) => return Err(error).context("connect to rate-limit Redis primary"),
@@ -354,7 +358,7 @@ impl IpRateLimiter {
                 Ok(_) => bail!("unexpected Redis PING response"),
                 Err(_) if attempt + 1 < REDIS_RETRY_ATTEMPTS => {
                     self.invalidate_connection().await;
-                    sleep(REDIS_RETRY_BACKOFF * (attempt as u32 + 1)).await;
+                    sleep(redis_retry_delay(attempt)).await;
                 }
                 Err(error) => return Err(error).context("ping rate-limit Redis connection"),
             }
