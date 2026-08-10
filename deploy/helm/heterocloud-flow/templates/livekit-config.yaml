@@ -15,7 +15,11 @@ data:
       sentinel_master_name: {{ include "flow.redisSentinelMaster" . }}
       sentinel_addresses:
         {{- if .Values.redis.enabled }}
-        - {{ .Values.redis.fullnameOverride }}:26379
+        {{- $fullname := .Values.redis.fullnameOverride }}
+        {{- $headless := printf "%s-headless" $fullname }}
+        {{- range $index := until (int .Values.redis.replica.replicaCount) }}
+        - {{ printf "%s-node-%d.%s.%s.svc.cluster.local:26379" $fullname $index $headless $.Release.Namespace }}
+        {{- end }}
         {{- else }}
         {{- range .Values.externalRedis.sentinelUrls }}
         - {{ trimPrefix "redis://" . }}

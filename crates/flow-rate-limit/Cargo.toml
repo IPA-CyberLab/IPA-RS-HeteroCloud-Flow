@@ -13,6 +13,7 @@ http.workspace = true
 ipnet.workspace = true
 redis.workspace = true
 sha2.workspace = true
+tracing.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 

@@ -83,7 +83,7 @@ livekit:
   replicaCount: 6
   image:
     repository: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-livekit
-    tag: "0.1.13"
+    tag: "0.1.14"
   publicUrls:
     - wss://flow.heterocloud.mizuame.app
   signal:

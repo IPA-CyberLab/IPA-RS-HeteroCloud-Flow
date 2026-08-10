@@ -55,7 +55,15 @@ app.kubernetes.io/part-of: heterocloud-flow
 
 {{- define "flow.redisSentinelUrls" -}}
 {{- if .Values.redis.enabled -}}
-redis://{{ .Values.redis.fullnameOverride }}:26379
+{{- $root := . -}}
+{{- $fullname := .Values.redis.fullnameOverride -}}
+{{- $headless := printf "%s-headless" $fullname -}}
+{{- $replicas := int .Values.redis.replica.replicaCount -}}
+{{- $urls := list -}}
+{{- range $index := until $replicas -}}
+{{- $urls = append $urls (printf "redis://%s-node-%d.%s.%s.svc.cluster.local:26379" $fullname $index $headless $root.Release.Namespace) -}}
+{{- end -}}
+{{ join "," $urls }}
 {{- else -}}
 {{ join "," .Values.externalRedis.sentinelUrls }}
 {{- end -}}

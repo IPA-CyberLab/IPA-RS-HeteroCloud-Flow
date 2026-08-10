@@ -3,6 +3,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     str::FromStr,
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -16,9 +17,12 @@ use redis::{
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 use uuid::Uuid;
 
 const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
+const REDIS_RETRY_ATTEMPTS: usize = 3;
+const REDIS_RETRY_BACKOFF: Duration = Duration::from_millis(100);
 
 const TOKEN_BUCKET_SCRIPT: &str = r"
 local rate = tonumber(ARGV[1])
@@ -135,23 +139,34 @@ impl RedisBackend {
             })
             .collect::<redis::RedisResult<Vec<_>>>()
             .context("parse Redis Sentinel URLs")?;
-        let mut builder = SentinelClientBuilder::new(
-            addresses,
-            &self.sentinel_master,
-            SentinelServerType::Master,
-        )
-        .context("configure Redis Sentinel")?;
-        if let Some(password) = &self.redis_password {
-            builder = builder.set_client_to_redis_password(password);
+        for attempt in 0..REDIS_RETRY_ATTEMPTS {
+            let mut builder = SentinelClientBuilder::new(
+                addresses.clone(),
+                &self.sentinel_master,
+                SentinelServerType::Master,
+            )
+            .context("configure Redis Sentinel")?;
+            if let Some(password) = &self.redis_password {
+                builder = builder.set_client_to_redis_password(password);
+            }
+            if let Some(password) = &self.sentinel_password {
+                builder = builder.set_client_to_sentinel_password(password);
+            }
+            let mut sentinel = builder.build().context("build Redis Sentinel client")?;
+            match sentinel.async_get_client().await {
+                Ok(client) => return Ok(client),
+                Err(error) if attempt + 1 < REDIS_RETRY_ATTEMPTS => {
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        %error,
+                        "Redis Sentinel master resolution failed; retrying"
+                    );
+                    sleep(REDIS_RETRY_BACKOFF * (attempt as u32 + 1)).await;
+                }
+                Err(error) => return Err(error).context("resolve Redis master"),
+            }
         }
-        if let Some(password) = &self.sentinel_password {
-            builder = builder.set_client_to_sentinel_password(password);
-        }
-        let mut sentinel = builder.build().context("build Redis Sentinel client")?;
-        sentinel
-            .async_get_client()
-            .await
-            .context("resolve Redis master")
+        unreachable!("Redis Sentinel resolution always returns from the retry loop")
     }
 
     /// Checks that the current Redis primary is reachable.
@@ -276,8 +291,20 @@ impl IpRateLimiter {
     }
 
     async fn check_key(&self, key: String, policy: RateLimitPolicy) -> Result<RateLimitDecision> {
-        for attempt in 0..2 {
-            let mut connection = self.connection().await?;
+        for attempt in 0..REDIS_RETRY_ATTEMPTS {
+            let mut connection = match self.connection().await {
+                Ok(connection) => connection,
+                Err(error) if attempt + 1 < REDIS_RETRY_ATTEMPTS => {
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        %error,
+                        "rate-limit Redis connection failed; retrying"
+                    );
+                    sleep(REDIS_RETRY_BACKOFF * (attempt as u32 + 1)).await;
+                    continue;
+                }
+                Err(error) => return Err(error).context("connect to rate-limit Redis primary"),
+            };
             let result = Script::new(TOKEN_BUCKET_SCRIPT)
                 .key(&key)
                 .arg(policy.requests_per_second)
@@ -294,13 +321,14 @@ impl IpRateLimiter {
                         reset_after_seconds: milliseconds_to_seconds(reset_after_ms),
                     });
                 }
-                Err(_) if attempt == 0 => {
+                Err(_) if attempt + 1 < REDIS_RETRY_ATTEMPTS => {
                     self.invalidate_connection().await;
+                    sleep(REDIS_RETRY_BACKOFF * (attempt as u32 + 1)).await;
                 }
                 Err(error) => return Err(error).context("apply Redis IP rate limit"),
             }
         }
-        unreachable!("rate limiter retries exactly once")
+        unreachable!("rate limiter retries always return from the retry loop")
     }
 
     /// Checks the cached limiter connection, resolving the current primary when needed.
@@ -309,19 +337,29 @@ impl IpRateLimiter {
     ///
     /// Returns an error when Redis is unavailable.
     pub async fn ping(&self) -> Result<()> {
-        for attempt in 0..2 {
-            let mut connection = self.connection().await?;
+        for attempt in 0..REDIS_RETRY_ATTEMPTS {
+            let mut connection = match self.connection().await {
+                Ok(connection) => connection,
+                Err(_error) if attempt + 1 < REDIS_RETRY_ATTEMPTS => {
+                    sleep(REDIS_RETRY_BACKOFF * (attempt as u32 + 1)).await;
+                    continue;
+                }
+                Err(error) => return Err(error).context("connect to rate-limit Redis primary"),
+            };
             let result = redis::cmd("PING")
                 .query_async::<String>(&mut connection)
                 .await;
             match result {
                 Ok(response) if response == "PONG" => return Ok(()),
                 Ok(_) => bail!("unexpected Redis PING response"),
-                Err(_) if attempt == 0 => self.invalidate_connection().await,
+                Err(_) if attempt + 1 < REDIS_RETRY_ATTEMPTS => {
+                    self.invalidate_connection().await;
+                    sleep(REDIS_RETRY_BACKOFF * (attempt as u32 + 1)).await;
+                }
                 Err(error) => return Err(error).context("ping rate-limit Redis connection"),
             }
         }
-        unreachable!("rate-limit Redis ping retries exactly once")
+        unreachable!("rate-limit Redis ping retries always return from the retry loop")
     }
 
     async fn connection(&self) -> Result<MultiplexedConnection> {
