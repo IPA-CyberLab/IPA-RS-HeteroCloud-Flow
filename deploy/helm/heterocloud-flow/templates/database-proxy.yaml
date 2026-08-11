@@ -2,6 +2,9 @@
 {{- if not (gt (len .Values.database.proxy.addresses) 0) }}
 {{- fail "database.proxy.addresses must contain at least one IPv4 address when database.proxy.enabled=true" }}
 {{- end }}
+{{- if not (gt (len .Values.database.proxy.endpointNodeNames) 0) }}
+{{- fail "database.proxy.endpointNodeNames must map every proxy address to a Kubernetes node when database.proxy.enabled=true" }}
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -11,6 +14,7 @@ metadata:
     app.kubernetes.io/component: database-proxy
 spec:
   type: ClusterIP
+  internalTrafficPolicy: Local
   ports:
     - name: postgres
       port: {{ .Values.database.proxy.port }}
@@ -34,6 +38,7 @@ endpoints:
   {{- range .Values.database.proxy.addresses }}
   - addresses:
       - {{ . | quote }}
+    nodeName: {{ required (printf "database.proxy.endpointNodeNames[%s] is required" .) (index $.Values.database.proxy.endpointNodeNames .) | quote }}
     conditions:
       ready: true
       serving: true
