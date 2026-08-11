@@ -45,6 +45,7 @@ database:
       - 10.250.0.4
       - 10.250.0.5
       - 10.250.0.6
+      - 10.250.0.10
   nodeSelector:
     database.heteronetwork.io/proxy-ready: "true"
   maxConnections:
