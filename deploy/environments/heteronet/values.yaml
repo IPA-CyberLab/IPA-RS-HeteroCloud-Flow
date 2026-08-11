@@ -57,7 +57,9 @@ database:
     enabled: false
 
 api:
-  replicaCount: 6
+  # Keep a Flow API endpoint on every HeteroNetwork node. The added
+  # ichikawap1 worker therefore participates in normal Service balancing.
+  replicaCount: 7
   publicUrls:
     - https://flow.heterocloud.mizuame.app
   # Per-node Caddy terminates TLS and health-checks all three forwarded ingress
@@ -75,10 +77,10 @@ api:
       - 163.220.236.53/32
 
 matchmaker:
-  replicaCount: 6
+  replicaCount: 7
 
 signaling:
-  replicaCount: 6
+  replicaCount: 7
   publicUrls:
     - wss://flow.heterocloud.mizuame.app
   publicService:
@@ -92,7 +94,7 @@ signaling:
       - 163.220.236.53/32
 
 livekit:
-  replicaCount: 6
+  replicaCount: 7
   image:
     repository: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-livekit
     tag: "0.1.17"
@@ -114,6 +116,7 @@ livekit:
       - http://10.250.0.3:6789/metrics
       - http://10.250.0.5:6789/metrics
       - http://10.250.0.6:6789/metrics
+      - http://10.250.0.10:6789/metrics
       - http://10.250.0.8:6789/metrics
   rtc:
     annotations:
@@ -124,12 +127,12 @@ livekit:
       memory: 512Mi
 
 coturn:
-  replicaCount: 3
+  replicaCount: 4
   relayPortMin: 49152
   relayPortMax: 57343
   additionalPools:
     - name: secondary
-      replicaCount: 3
+      replicaCount: 4
       servicePort: 3479
       relayPortMin: 57344
       relayPortMax: 65535
@@ -151,27 +154,33 @@ coturn:
       - nodeName: uc-k8s3p
         publicIp: 163.220.236.53
         privateIp: 10.250.0.6
+      - nodeName: ichikawap1
+        publicIp: 163.220.236.61
+        privateIp: 10.250.0.10
   metrics:
     urls:
       - http://10.250.0.5:9641/metrics
       - http://10.250.0.6:9641/metrics
       - http://10.250.0.8:9641/metrics
+      - http://10.250.0.10:9641/metrics
       - http://10.250.0.5:9642/metrics
       - http://10.250.0.6:9642/metrics
       - http://10.250.0.8:9642/metrics
+      - http://10.250.0.10:9641/metrics
+      - http://10.250.0.10:9642/metrics
   resources:
     requests:
       cpu: 250m
       memory: 256Mi
   annotations:
-    networking.heteronetwork.io/ingress-replicas: "3"
+    networking.heteronetwork.io/ingress-replicas: "4"
   nodeSelector:
     networking.heteronetwork.io/public-ingress: "true"
 
 monitoring:
   prometheus:
     enabled: true
-    replicaCount: 5
+    replicaCount: 6
     service:
       type: LoadBalancer
       loadBalancerClass: heteronetwork.io/public
@@ -200,7 +209,7 @@ monitoring:
       minAvailable: 3
   grafana:
     enabled: true
-    replicaCount: 5
+    replicaCount: 6
     # Port 3000 is already occupied by an unrelated host service on one worker.
     # The LoadBalancer remains on 3000 and targets this private listener.
     listenPort: 33000
