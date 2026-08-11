@@ -166,7 +166,6 @@ coturn:
       - http://10.250.0.5:9642/metrics
       - http://10.250.0.6:9642/metrics
       - http://10.250.0.8:9642/metrics
-      - http://10.250.0.10:9641/metrics
       - http://10.250.0.10:9642/metrics
   resources:
     requests:
