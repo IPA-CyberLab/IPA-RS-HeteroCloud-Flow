@@ -152,7 +152,7 @@ data:
           "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
           "id": 5,
           "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
-          "targets": [{"editorMode": "code", "expr": "flow:node_cpu_utilization:ratio{node=~\"$node\"}", "legendFormat": "", "range": true, "refId": "A"}],
+          "targets": [{"editorMode": "code", "expr": "max by (node) (flow:node_cpu_utilization:ratio{node=~\"$node\"})", "legendFormat": "", "range": true, "refId": "A"}],
           "title": "Node CPU utilization",
           "type": "timeseries"
         },
@@ -162,7 +162,7 @@ data:
           "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
           "id": 6,
           "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
-          "targets": [{"editorMode": "code", "expr": "flow:node_memory_working_set:ratio{node=~\"$node\"}", "legendFormat": "", "range": true, "refId": "A"}],
+          "targets": [{"editorMode": "code", "expr": "max by (node) (flow:node_memory_working_set:ratio{node=~\"$node\"})", "legendFormat": "", "range": true, "refId": "A"}],
           "title": "Node memory utilization",
           "type": "timeseries"
         },

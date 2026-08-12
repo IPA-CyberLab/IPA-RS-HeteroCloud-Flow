@@ -49,6 +49,8 @@ jq -e '
 
 grep -q 'heteronetwork:node_vpn_receive_bytes_per_second' "$work_dir/dashboard.json"
 grep -q 'flow:node_cpu_utilization:ratio' "$work_dir/dashboard.json"
+grep -q 'max by (node) (flow:node_cpu_utilization:ratio' "$work_dir/dashboard.json"
+grep -q 'max by (node) (flow:node_memory_working_set:ratio' "$work_dir/dashboard.json"
 grep -q 'turn_total_traffic_rcvb' "$work_dir/dashboard.json"
 
 helm template heterocloud-flow "$chart_dir" \
