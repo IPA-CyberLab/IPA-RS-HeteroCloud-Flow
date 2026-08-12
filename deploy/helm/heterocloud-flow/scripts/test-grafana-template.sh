@@ -12,7 +12,7 @@ helm template heterocloud-flow "$chart_dir" \
   --values "$environment_values" \
   --show-only templates/grafana.yaml > "$work_dir/grafana.yaml"
 
-grep -q 'replicas: 5' "$work_dir/grafana.yaml"
+grep -q 'replicas: 6' "$work_dir/grafana.yaml"
 grep -q 'hostNetwork: true' "$work_dir/grafana.yaml"
 grep -q 'containerPort: 33000' "$work_dir/grafana.yaml"
 grep -q 'grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63' "$work_dir/grafana.yaml"
@@ -39,10 +39,11 @@ awk '
 jq -e '
   .uid == "heterocloud-flow-overview" and
   .title == "HeteroCloud Flow and VPN" and
-  (.panels | length) == 12 and
+  (.panels | length) == 13 and
   ([.panels[].title] | index("HeteroNetwork VPN bandwidth") != null) and
   ([.panels[].title] | index("TURN throughput") != null) and
   ([.panels[].title] | index("Node CPU utilization") != null) and
+  ([.panels[].title] | index("Node metrics availability") != null) and
   ([.panels[].title] | index("Monitoring target availability") == null)
 ' "$work_dir/dashboard.json" >/dev/null
 
