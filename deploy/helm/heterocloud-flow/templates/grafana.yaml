@@ -1,6 +1,5 @@
 {{- if .Values.monitoring.grafana.enabled }}
 {{- $grafana := .Values.monitoring.grafana -}}
-{{- $databaseNodeSelector := mergeOverwrite (deepCopy ($grafana.nodeSelector | default dict)) (.Values.database.nodeSelector | default dict) -}}
 {{- $replicaCount := int $grafana.replicaCount -}}
 {{- $serviceType := $grafana.service.type -}}
 {{- if not .Values.monitoring.prometheus.enabled -}}
@@ -486,7 +485,7 @@ spec:
                   {{- include "flow.selectorLabels" . | nindent 18 }}
                   app.kubernetes.io/component: grafana
       {{- end }}
-      {{- with $databaseNodeSelector }}
+      {{- with $grafana.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}

@@ -21,12 +21,12 @@ for component in prometheus grafana; do
   grep -q '^  replicas: 6$' "$tmp_dir/${component}.yaml"
 done
 
-for component in api matchmaker signaling grafana; do
+for component in api matchmaker signaling; do
   grep -q '^      nodeSelector:$' "$tmp_dir/${component}.yaml"
   grep -q 'database.heteronetwork.io/proxy-ready: "true"' "$tmp_dir/${component}.yaml"
 done
 
-for component in livekit prometheus; do
+for component in livekit prometheus grafana; do
   ! grep -q '^      nodeSelector:' "$tmp_dir/${component}.yaml"
 done
 
