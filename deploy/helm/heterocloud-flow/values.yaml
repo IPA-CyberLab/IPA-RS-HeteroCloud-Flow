@@ -183,7 +183,9 @@ coturn:
       cpu: 200m
       memory: 256Mi
     limits:
-      cpu: "2"
+      # TURN is a bandwidth-bound data plane. A fixed CPU limit throttles large
+      # relay nodes to the capacity of the smallest worker, so let the kernel
+      # scheduler use the CPU available on each host.
       memory: 1Gi
 
 redis:

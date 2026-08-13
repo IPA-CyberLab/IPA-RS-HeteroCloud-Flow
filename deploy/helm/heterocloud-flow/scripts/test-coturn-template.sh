@@ -60,6 +60,11 @@ assert_contains 'set -- "$@" "--relay-ip=${selected_public_ip}"' "${tmp_dir}/cot
 assert_contains '"--external-ip=${selected_public_ip}/${selected_private_ip}"' "${tmp_dir}/coturn.yaml"
 assert_contains 'has no matching coturn.relayAddress.mappings entry' "${tmp_dir}/coturn.yaml"
 assert_contains 'is not assigned to a local interface' "${tmp_dir}/coturn.yaml"
+assert_contains 'dns.heterocloud.io/publish: "true"' "${tmp_dir}/coturn.yaml"
+assert_contains 'external-dns.alpha.kubernetes.io/hostname: "turn-a.example.test,turn-b.example.test,turn-c.example.test"' "${tmp_dir}/coturn.yaml"
+test "$(grep -c 'external-dns.alpha.kubernetes.io/hostname:' "${tmp_dir}/coturn.yaml")" -eq 1
+assert_not_contains 'cpu: "2"' "${tmp_dir}/coturn.yaml"
+assert_contains 'memory: 1Gi' "${tmp_dir}/coturn.yaml"
 
 awk '
   $0 == "          args:" { in_args = 1; next }

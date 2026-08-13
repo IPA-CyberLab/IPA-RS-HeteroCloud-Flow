@@ -317,8 +317,15 @@ metadata:
     {{- include "flow.labels" . | nindent 4 }}
     app.kubernetes.io/component: coturn
     flow.heterocloud.io/turn-pool: {{ $pool.name }}
+    {{- if eq $pool.name "primary" }}
+    dns.heterocloud.io/publish: "true"
+    {{- end }}
   annotations:
     networking.heteronetwork.io/traffic-mode: "direct"
+    {{- if eq $pool.name "primary" }}
+    external-dns.alpha.kubernetes.io/hostname: {{ join "," .Values.coturn.publicHosts | quote }}
+    external-dns.alpha.kubernetes.io/ttl: "60"
+    {{- end }}
     {{- with .Values.coturn.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
