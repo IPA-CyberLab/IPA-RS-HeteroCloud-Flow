@@ -73,6 +73,8 @@ assert_contains 'net.core.wmem_max=16777216' "${tmp_dir}/coturn.yaml"
 assert_contains 'net.core.netdev_max_backlog=65536' "${tmp_dir}/coturn.yaml"
 assert_contains '--sock-buf-size=4194304' "${tmp_dir}/coturn.yaml"
 assert_contains 'privileged: true' "${tmp_dir}/coturn.yaml"
+assert_contains 'cp /var/lib/coturn/turndb /tmp/turndb' "${tmp_dir}/coturn.yaml"
+assert_contains 'chmod 0600 /tmp/turndb' "${tmp_dir}/coturn.yaml"
 
 render --set coturn.performance.tuneHostUdpBuffers=false >"${tmp_dir}/coturn-no-host-tuning.yaml"
 assert_not_contains 'name: tune-host-udp-buffers' "${tmp_dir}/coturn-no-host-tuning.yaml"
@@ -83,6 +85,11 @@ awk '
   in_script && $0 == "          env:" { exit }
   in_script { sub(/^              /, ""); print }
 ' "${tmp_dir}/coturn.yaml" >"${tmp_dir}/start-coturn.sh"
+touch "${tmp_dir}/turndb.template"
+sed -i \
+  -e "s#/var/lib/coturn/turndb#${tmp_dir}/turndb.template#g" \
+  -e "s#/tmp/turndb#${tmp_dir}/turndb#g" \
+  "${tmp_dir}/start-coturn.sh"
 mkdir "${tmp_dir}/bin"
 cat >"${tmp_dir}/bin/turnserver" <<'EOF'
 #!/bin/sh

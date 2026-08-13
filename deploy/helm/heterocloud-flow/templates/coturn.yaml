@@ -181,6 +181,9 @@ spec:
           command: ["/bin/sh", "-ec"]
           args:
             - |
+              cp /var/lib/coturn/turndb /tmp/turndb
+              chmod 0600 /tmp/turndb
+
               set -- turnserver \
                 -n \
                 --log-file=stdout \
