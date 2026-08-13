@@ -178,13 +178,6 @@ coturn:
       repository: busybox
       tag: "1.36"
       pullPolicy: IfNotPresent
-    multiplexPeer:
-      # Shares relay sockets across allocations and batches UDP egress. Keep
-      # this opt-in because coturn rejects the legacy EVEN-PORT attribute in
-      # multiplexed mode.
-      enabled: false
-      maxPeersPerAllocation: 256
-      udpGso: false
     socketBufferBytes: 4194304
     tuneHostUdpBuffers: true
     hostReceiveBufferMaxBytes: 16777216

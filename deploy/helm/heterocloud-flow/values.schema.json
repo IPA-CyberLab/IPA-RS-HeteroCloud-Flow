@@ -354,7 +354,6 @@
           "additionalProperties": false,
           "required": [
             "tuningImage",
-            "multiplexPeer",
             "socketBufferBytes",
             "tuneHostUdpBuffers",
             "hostReceiveBufferMaxBytes",
@@ -373,20 +372,6 @@
                   "type": "string",
                   "enum": ["Always", "IfNotPresent", "Never"]
                 }
-              }
-            },
-            "multiplexPeer": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["enabled", "maxPeersPerAllocation", "udpGso"],
-              "properties": {
-                "enabled": {"type": "boolean"},
-                "maxPeersPerAllocation": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 65535
-                },
-                "udpGso": {"type": "boolean"}
               }
             },
             "socketBufferBytes": {

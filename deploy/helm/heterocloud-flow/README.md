@@ -183,11 +183,6 @@ coturn:
   servicePort: 3478
   relayPortMin: 49152
   relayPortMax: 57343
-  performance:
-    multiplexPeer:
-      enabled: true
-      maxPeersPerAllocation: 256
-      udpGso: false
   additionalPools:
     - name: secondary
       replicaCount: 3
@@ -232,12 +227,6 @@ mapped public node. The NAT path must preserve relay ports one-to-one; for
 example, public UDP port `49162` must reach private UDP port `49162` on the
 mapped node. This NAT requirement applies only to `one-to-one-nat`; in
 `direct-public`, open the relay range on the directly assigned public address.
-
-`performance.multiplexPeer.enabled` uses coturn's shared relay sockets, with
-each pool's `relayPortMin` as its socket range base. It removes per-allocation
-relay-port exhaustion and enables batched UDP writes, but it is incompatible
-with the legacy TURN `EVEN-PORT` attribute. Enable it only for RTCP-mux clients
-such as the WebRTC clients used by Flow.
 
 ## External Redis
 
