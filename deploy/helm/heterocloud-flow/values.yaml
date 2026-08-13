@@ -173,6 +173,12 @@ coturn:
   relayPortMin: 49160
   relayPortMax: 49260
   credentialTtlSeconds: 300
+  performance:
+    socketBufferBytes: 4194304
+    tuneHostUdpBuffers: true
+    hostReceiveBufferMaxBytes: 16777216
+    hostSendBufferMaxBytes: 16777216
+    hostNetdevMaxBacklog: 65536
   metrics:
     port: 9641
     urls: []

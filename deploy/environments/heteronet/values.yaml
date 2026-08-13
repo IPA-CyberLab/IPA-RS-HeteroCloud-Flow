@@ -153,7 +153,9 @@ coturn:
   relayAddress:
     # Keep TURN on the same public nodes that terminate flow HTTPS. This makes
     # every address in the unified flow DNS RRset valid for HTTP, WSS and TURN.
-    mode: one-to-one-nat
+    # These addresses are assigned directly to the selected hosts. Bind relay
+    # sockets to them so media does not make an avoidable VPN round trip.
+    mode: direct-public
     mappings:
       - nodeName: uc-k8sp1
         publicIp: 163.220.236.51

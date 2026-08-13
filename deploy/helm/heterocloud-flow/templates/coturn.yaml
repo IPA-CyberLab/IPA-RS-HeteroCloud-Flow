@@ -156,6 +156,24 @@ spec:
                   app.kubernetes.io/component: coturn
                   flow.heterocloud.io/turn-pool: {{ $pool.name }}
       terminationGracePeriodSeconds: 30
+      {{- if .Values.coturn.performance.tuneHostUdpBuffers }}
+      initContainers:
+        - name: tune-host-udp-buffers
+          image: "{{ .Values.coturn.image.repository }}:{{ .Values.coturn.image.tag }}"
+          imagePullPolicy: {{ .Values.coturn.image.pullPolicy }}
+          command:
+            - /sbin/sysctl
+            - -w
+            - net.core.rmem_max={{ int .Values.coturn.performance.hostReceiveBufferMaxBytes }}
+            - net.core.wmem_max={{ int .Values.coturn.performance.hostSendBufferMaxBytes }}
+            - net.core.netdev_max_backlog={{ int .Values.coturn.performance.hostNetdevMaxBacklog }}
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+            readOnlyRootFilesystem: true
+      {{- end }}
       containers:
         - name: coturn
           image: "{{ .Values.coturn.image.repository }}:{{ .Values.coturn.image.tag }}"
@@ -175,6 +193,7 @@ spec:
                 --listening-port={{ $pool.servicePort }} \
                 --min-port={{ $pool.relayPortMin }} \
                 --max-port={{ $pool.relayPortMax }} \
+                --sock-buf-size={{ int .Values.coturn.performance.socketBufferBytes }} \
                 --stale-nonce=600 \
                 --no-tls \
                 --no-dtls \

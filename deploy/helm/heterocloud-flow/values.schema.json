@@ -265,7 +265,7 @@
     },
     "coturn": {
       "type": "object",
-      "required": ["replicaCount", "publicHosts", "relayAddress", "metrics"],
+      "required": ["replicaCount", "publicHosts", "relayAddress", "performance", "metrics"],
       "properties": {
         "replicaCount": {"type": "integer", "minimum": 3},
         "additionalPools": {
@@ -348,6 +348,40 @@
           "type": "integer",
           "minimum": 1024,
           "maximum": 65535
+        },
+        "performance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "socketBufferBytes",
+            "tuneHostUdpBuffers",
+            "hostReceiveBufferMaxBytes",
+            "hostSendBufferMaxBytes",
+            "hostNetdevMaxBacklog"
+          ],
+          "properties": {
+            "socketBufferBytes": {
+              "type": "integer",
+              "minimum": 262144,
+              "maximum": 67108864
+            },
+            "tuneHostUdpBuffers": {"type": "boolean"},
+            "hostReceiveBufferMaxBytes": {
+              "type": "integer",
+              "minimum": 262144,
+              "maximum": 268435456
+            },
+            "hostSendBufferMaxBytes": {
+              "type": "integer",
+              "minimum": 262144,
+              "maximum": 268435456
+            },
+            "hostNetdevMaxBacklog": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 1048576
+            }
+          }
         },
         "metrics": {
           "type": "object",

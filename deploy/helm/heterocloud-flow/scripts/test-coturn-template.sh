@@ -65,6 +65,15 @@ assert_contains 'external-dns.alpha.kubernetes.io/hostname: "turn-a.example.test
 test "$(grep -c 'external-dns.alpha.kubernetes.io/hostname:' "${tmp_dir}/coturn.yaml")" -eq 1
 assert_not_contains 'cpu: "2"' "${tmp_dir}/coturn.yaml"
 assert_contains 'memory: 1Gi' "${tmp_dir}/coturn.yaml"
+assert_contains 'name: tune-host-udp-buffers' "${tmp_dir}/coturn.yaml"
+assert_contains 'net.core.rmem_max=16777216' "${tmp_dir}/coturn.yaml"
+assert_contains 'net.core.wmem_max=16777216' "${tmp_dir}/coturn.yaml"
+assert_contains 'net.core.netdev_max_backlog=65536' "${tmp_dir}/coturn.yaml"
+assert_contains '--sock-buf-size=4194304' "${tmp_dir}/coturn.yaml"
+assert_contains 'privileged: true' "${tmp_dir}/coturn.yaml"
+
+render --set coturn.performance.tuneHostUdpBuffers=false >"${tmp_dir}/coturn-no-host-tuning.yaml"
+assert_not_contains 'name: tune-host-udp-buffers' "${tmp_dir}/coturn-no-host-tuning.yaml"
 
 awk '
   $0 == "          args:" { in_args = 1; next }
