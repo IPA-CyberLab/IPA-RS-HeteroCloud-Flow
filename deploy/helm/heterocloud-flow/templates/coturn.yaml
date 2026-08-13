@@ -159,10 +159,10 @@ spec:
       {{- if .Values.coturn.performance.tuneHostUdpBuffers }}
       initContainers:
         - name: tune-host-udp-buffers
-          image: "{{ .Values.coturn.image.repository }}:{{ .Values.coturn.image.tag }}"
-          imagePullPolicy: {{ .Values.coturn.image.pullPolicy }}
+          image: "{{ .Values.coturn.performance.tuningImage.repository }}:{{ .Values.coturn.performance.tuningImage.tag }}"
+          imagePullPolicy: {{ .Values.coturn.performance.tuningImage.pullPolicy }}
           command:
-            - /sbin/sysctl
+            - /bin/sysctl
             - -w
             - net.core.rmem_max={{ int .Values.coturn.performance.hostReceiveBufferMaxBytes }}
             - net.core.wmem_max={{ int .Values.coturn.performance.hostSendBufferMaxBytes }}

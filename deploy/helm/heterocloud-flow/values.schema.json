@@ -353,6 +353,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
+            "tuningImage",
             "socketBufferBytes",
             "tuneHostUdpBuffers",
             "hostReceiveBufferMaxBytes",
@@ -360,6 +361,19 @@
             "hostNetdevMaxBacklog"
           ],
           "properties": {
+            "tuningImage": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["repository", "tag", "pullPolicy"],
+              "properties": {
+                "repository": {"type": "string", "minLength": 1},
+                "tag": {"type": "string", "minLength": 1},
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": ["Always", "IfNotPresent", "Never"]
+                }
+              }
+            },
             "socketBufferBytes": {
               "type": "integer",
               "minimum": 262144,

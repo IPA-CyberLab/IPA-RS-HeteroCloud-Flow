@@ -66,6 +66,8 @@ test "$(grep -c 'external-dns.alpha.kubernetes.io/hostname:' "${tmp_dir}/coturn.
 assert_not_contains 'cpu: "2"' "${tmp_dir}/coturn.yaml"
 assert_contains 'memory: 1Gi' "${tmp_dir}/coturn.yaml"
 assert_contains 'name: tune-host-udp-buffers' "${tmp_dir}/coturn.yaml"
+assert_contains 'image: "busybox:1.36"' "${tmp_dir}/coturn.yaml"
+assert_contains '- /bin/sysctl' "${tmp_dir}/coturn.yaml"
 assert_contains 'net.core.rmem_max=16777216' "${tmp_dir}/coturn.yaml"
 assert_contains 'net.core.wmem_max=16777216' "${tmp_dir}/coturn.yaml"
 assert_contains 'net.core.netdev_max_backlog=65536' "${tmp_dir}/coturn.yaml"
