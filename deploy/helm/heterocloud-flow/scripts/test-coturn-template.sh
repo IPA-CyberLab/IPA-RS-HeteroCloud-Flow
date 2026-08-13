@@ -75,6 +75,21 @@ assert_contains '--sock-buf-size=4194304' "${tmp_dir}/coturn.yaml"
 assert_contains 'privileged: true' "${tmp_dir}/coturn.yaml"
 assert_contains 'cp /var/lib/coturn/turndb /tmp/turndb' "${tmp_dir}/coturn.yaml"
 assert_contains 'chmod 0600 /tmp/turndb' "${tmp_dir}/coturn.yaml"
+assert_not_contains '--multiplex-peer' "${tmp_dir}/coturn.yaml"
+
+render \
+  --set coturn.performance.multiplexPeer.enabled=true \
+  >"${tmp_dir}/coturn-multiplexed.yaml"
+assert_contains '--multiplex-peer' "${tmp_dir}/coturn-multiplexed.yaml"
+assert_contains '"--multiplex-peer-port=49160"' "${tmp_dir}/coturn-multiplexed.yaml"
+assert_contains '"--multiplex-peer-max-peers=256"' "${tmp_dir}/coturn-multiplexed.yaml"
+assert_not_contains '--udp-gso' "${tmp_dir}/coturn-multiplexed.yaml"
+
+render \
+  --set coturn.performance.multiplexPeer.enabled=true \
+  --set coturn.performance.multiplexPeer.udpGso=true \
+  >"${tmp_dir}/coturn-multiplexed-gso.yaml"
+assert_contains 'set -- "$@" --udp-gso' "${tmp_dir}/coturn-multiplexed-gso.yaml"
 
 render --set coturn.performance.tuneHostUdpBuffers=false >"${tmp_dir}/coturn-no-host-tuning.yaml"
 assert_not_contains 'name: tune-host-udp-buffers' "${tmp_dir}/coturn-no-host-tuning.yaml"
@@ -214,6 +229,13 @@ assert_contains '--listening-port=3479' "${tmp_dir}/coturn-pools.yaml"
 assert_contains '--min-port=50000' "${tmp_dir}/coturn-pools.yaml"
 assert_contains '--max-port=50100' "${tmp_dir}/coturn-pools.yaml"
 assert_contains '--prometheus-port=9642' "${tmp_dir}/coturn-pools.yaml"
+
+render \
+  --set coturn.performance.multiplexPeer.enabled=true \
+  --set-json 'coturn.additionalPools=[{"name":"secondary","replicaCount":3,"servicePort":3479,"relayPortMin":50000,"relayPortMax":50100,"metricsPort":9642}]' \
+  >"${tmp_dir}/coturn-multiplexed-pools.yaml"
+assert_contains '"--multiplex-peer-port=49160"' "${tmp_dir}/coturn-multiplexed-pools.yaml"
+assert_contains '"--multiplex-peer-port=50000"' "${tmp_dir}/coturn-multiplexed-pools.yaml"
 selector_pool_deployments=$(awk '
   $0 == "kind: Deployment" { deployment = 1; name = ""; in_selector = 0; next }
   deployment && $1 == "name:" && name == "" { name = $2; next }

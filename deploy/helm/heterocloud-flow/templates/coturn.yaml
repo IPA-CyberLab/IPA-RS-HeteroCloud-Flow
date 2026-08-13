@@ -208,6 +208,16 @@ spec:
                 --prometheus-port={{ $pool.metricsPort }} \
                 --prometheus-username-labels
 
+              {{- if .Values.coturn.performance.multiplexPeer.enabled }}
+              set -- "$@" \
+                --multiplex-peer \
+                "--multiplex-peer-port={{ $pool.relayPortMin }}" \
+                "--multiplex-peer-max-peers={{ int .Values.coturn.performance.multiplexPeer.maxPeersPerAllocation }}"
+              {{- if .Values.coturn.performance.multiplexPeer.udpGso }}
+              set -- "$@" --udp-gso
+              {{- end }}
+              {{- end }}
+
               if [ "${TURN_RELAY_ADDRESS_MODE}" != host ]; then
                 selected_node_name=
                 selected_public_ip=

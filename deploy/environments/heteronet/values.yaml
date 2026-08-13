@@ -179,6 +179,14 @@ coturn:
       - http://10.250.0.5:9642/metrics
       - http://10.250.0.6:9642/metrics
       - http://10.250.0.10:9642/metrics
+  performance:
+    # WebRTC uses RTCP mux and does not request legacy EVEN-PORT allocations.
+    # Shared relay sockets avoid per-session port exhaustion and batch UDP
+    # egress on the high-capacity public nodes.
+    multiplexPeer:
+      enabled: true
+      maxPeersPerAllocation: 256
+      udpGso: false
   resources:
     requests:
       cpu: 250m
