@@ -49,11 +49,13 @@ database:
       - 10.250.0.4
       - 10.250.0.5
       - 10.250.0.6
+      - 10.250.0.8
       - 10.250.0.10
     endpointNodeNames:
       "10.250.0.4": uc-k8sp1
       "10.250.0.5": uc-k8sp2
       "10.250.0.6": uc-k8s3p
+      "10.250.0.8": uc-k8sv1
       "10.250.0.10": ichikawap1
   nodeSelector:
     database.heteronetwork.io/proxy-ready: "true"

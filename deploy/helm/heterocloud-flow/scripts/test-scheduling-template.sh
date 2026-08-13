@@ -7,7 +7,7 @@ environment_values="$repo_dir/deploy/environments/heteronet/values.yaml"
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
 
-for component in api matchmaker signaling livekit coturn prometheus grafana pdb; do
+for component in api matchmaker signaling livekit coturn prometheus grafana pdb database-proxy; do
   helm template flow "$chart_dir" -f "$environment_values" \
     --namespace heterocloud-flow \
     --show-only "templates/${component}.yaml" >"$tmp_dir/${component}.yaml"
@@ -15,6 +15,7 @@ done
 
 for component in api matchmaker signaling livekit; do
   grep -q '^  replicas: 7$' "$tmp_dir/${component}.yaml"
+  grep -q '^          nodeTaintsPolicy: Honor$' "$tmp_dir/${component}.yaml"
 done
 
 for component in prometheus grafana; do
@@ -31,6 +32,7 @@ for component in livekit prometheus grafana; do
 done
 
 test "$(grep -c '^  replicas: 4$' "$tmp_dir/coturn.yaml")" -eq 2
+test "$(grep -c '^          nodeTaintsPolicy: Honor$' "$tmp_dir/coturn.yaml")" -eq 2
 grep -q '^      nodeSelector:$' "$tmp_dir/coturn.yaml"
 grep -q 'networking.heteronetwork.io/public-ingress: "true"' "$tmp_dir/coturn.yaml"
 
@@ -47,6 +49,10 @@ for index in 0 1 2; do
 done
 grep -q '^  internalTrafficPolicy: Local$' "$tmp_dir/all.yaml"
 grep -q 'nodeName: "ichikawap1"' "$tmp_dir/all.yaml"
+grep -q -- '- "10.250.0.8"' "$tmp_dir/database-proxy.yaml"
+grep -q 'nodeName: "uc-k8sv1"' "$tmp_dir/database-proxy.yaml"
+grep -q '^          preferredDuringSchedulingIgnoredDuringExecution:$' "$tmp_dir/livekit.yaml"
+! grep -q '^          requiredDuringSchedulingIgnoredDuringExecution:$' "$tmp_dir/livekit.yaml"
 
 helm template flow "$chart_dir" \
   --namespace heterocloud-flow \

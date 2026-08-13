@@ -46,13 +46,7 @@ spec:
       topologySpreadConstraints:
         {{- include "flow.topologySpread" (dict "root" . "component" "livekit") | nindent 8 }}
       affinity:
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - topologyKey: kubernetes.io/hostname
-              labelSelector:
-                matchLabels:
-                  {{- include "flow.selectorLabels" . | nindent 18 }}
-                  app.kubernetes.io/component: livekit
+        {{- include "flow.requiredPodAntiAffinity" (dict "root" . "component" "livekit") | nindent 8 }}
       terminationGracePeriodSeconds: 18000
       containers:
         - name: livekit
