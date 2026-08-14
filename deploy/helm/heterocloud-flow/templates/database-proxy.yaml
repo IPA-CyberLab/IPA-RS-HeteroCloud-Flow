@@ -14,7 +14,7 @@ metadata:
     app.kubernetes.io/component: database-proxy
 spec:
   type: ClusterIP
-  internalTrafficPolicy: Local
+  internalTrafficPolicy: Cluster
   ports:
     - name: postgres
       port: {{ .Values.database.proxy.port }}

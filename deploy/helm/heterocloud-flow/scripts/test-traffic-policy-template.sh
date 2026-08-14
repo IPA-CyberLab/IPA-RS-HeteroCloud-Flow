@@ -15,6 +15,9 @@ helm template flow "$chart_dir" -f "$test_values" \
   --show-only templates/coturn.yaml >"$tmp_dir/coturn.yaml"
 helm template flow "$chart_dir" -f "$environment_values" >"$tmp_dir/heteronet.yaml"
 
+grep -A12 'name: heterocloud-flow-postgres-proxy' "$tmp_dir/heteronet.yaml" |
+  grep -q 'internalTrafficPolicy: Cluster'
+
 test "$(grep -c 'networking.heteronetwork.io/traffic-mode: "forwarded"' "$tmp_dir/livekit.yaml")" -eq 2
 ! grep -q 'networking.heteronetwork.io/traffic-mode: direct' "$tmp_dir/livekit.yaml"
 test "$(grep -c 'externalTrafficPolicy: Cluster' "$tmp_dir/livekit.yaml")" -eq 2
