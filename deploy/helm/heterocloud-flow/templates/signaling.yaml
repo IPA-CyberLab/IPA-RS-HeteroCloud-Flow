@@ -121,7 +121,8 @@ spec:
               path: /health/ready
               port: websocket
             periodSeconds: 5
-            timeoutSeconds: 2
+            timeoutSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health/live

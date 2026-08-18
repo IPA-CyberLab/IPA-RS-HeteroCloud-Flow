@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use http::{HeaderMap, HeaderName};
 use ipnet::IpNet;
@@ -17,15 +17,30 @@ use redis::{
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
 const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
-const REDIS_RETRY_ATTEMPTS: usize = 3;
+const REDIS_RETRY_ATTEMPTS: usize = 6;
 const REDIS_RETRY_BACKOFF: Duration = Duration::from_millis(100);
+const REDIS_RETRY_MAX_EXPONENT: usize = 3;
+const REDIS_SENTINEL_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(750);
 
 fn redis_retry_delay(attempt: usize) -> Duration {
-    REDIS_RETRY_BACKOFF * u32::try_from(attempt + 1).expect("Redis retry attempt count fits in u32")
+    let exponent = attempt.min(REDIS_RETRY_MAX_EXPONENT);
+    REDIS_RETRY_BACKOFF.saturating_mul(1_u32 << exponent)
+}
+
+fn rotated_sentinel_addresses(
+    addresses: &[redis::ConnectionAddr],
+    attempt: usize,
+) -> Vec<redis::ConnectionAddr> {
+    let mut rotated = addresses.to_vec();
+    if !rotated.is_empty() {
+        let offset = attempt % rotated.len();
+        rotated.rotate_left(offset);
+    }
+    rotated
 }
 
 const TOKEN_BUCKET_SCRIPT: &str = r"
@@ -145,7 +160,7 @@ impl RedisBackend {
             .context("parse Redis Sentinel URLs")?;
         for attempt in 0..REDIS_RETRY_ATTEMPTS {
             let mut builder = SentinelClientBuilder::new(
-                addresses.clone(),
+                rotated_sentinel_addresses(&addresses, attempt),
                 &self.sentinel_master,
                 SentinelServerType::Master,
             )
@@ -157,7 +172,15 @@ impl RedisBackend {
                 builder = builder.set_client_to_sentinel_password(password);
             }
             let mut sentinel = builder.build().context("build Redis Sentinel client")?;
-            match sentinel.async_get_client().await {
+            let resolution =
+                match timeout(REDIS_SENTINEL_ATTEMPT_TIMEOUT, sentinel.async_get_client()).await {
+                    Ok(result) => result.map_err(anyhow::Error::from),
+                    Err(_) => Err(anyhow!(
+                        "Redis Sentinel master resolution timed out after {} ms",
+                        REDIS_SENTINEL_ATTEMPT_TIMEOUT.as_millis()
+                    )),
+                };
+            match resolution {
                 Ok(client) => return Ok(client),
                 Err(error) if attempt + 1 < REDIS_RETRY_ATTEMPTS => {
                     tracing::warn!(
@@ -512,10 +535,41 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     use http::{HeaderMap, HeaderValue};
+    use redis::ConnectionAddr;
 
     use super::{
-        TrustedProxies, milliseconds_to_seconds, service_rate_limit_key, system_rate_limit_key,
+        TrustedProxies, milliseconds_to_seconds, redis_retry_delay, rotated_sentinel_addresses,
+        service_rate_limit_key, system_rate_limit_key,
     };
+
+    #[test]
+    fn sentinel_retries_rotate_across_distinct_nodes() {
+        let addresses = vec![
+            ConnectionAddr::Tcp("sentinel-0".into(), 26379),
+            ConnectionAddr::Tcp("sentinel-1".into(), 26379),
+            ConnectionAddr::Tcp("sentinel-2".into(), 26379),
+        ];
+
+        assert_eq!(rotated_sentinel_addresses(&addresses, 0), addresses);
+        assert_eq!(
+            rotated_sentinel_addresses(&addresses, 1),
+            vec![
+                ConnectionAddr::Tcp("sentinel-1".into(), 26379),
+                ConnectionAddr::Tcp("sentinel-2".into(), 26379),
+                ConnectionAddr::Tcp("sentinel-0".into(), 26379),
+            ]
+        );
+        assert_eq!(rotated_sentinel_addresses(&addresses, 3), addresses);
+    }
+
+    #[test]
+    fn redis_retry_backoff_is_exponential_and_bounded() {
+        assert_eq!(redis_retry_delay(0), std::time::Duration::from_millis(100));
+        assert_eq!(redis_retry_delay(1), std::time::Duration::from_millis(200));
+        assert_eq!(redis_retry_delay(2), std::time::Duration::from_millis(400));
+        assert_eq!(redis_retry_delay(3), std::time::Duration::from_millis(800));
+        assert_eq!(redis_retry_delay(8), std::time::Duration::from_millis(800));
+    }
 
     #[test]
     fn untrusted_peer_cannot_spoof_forwarded_address() {

@@ -14,7 +14,9 @@ metadata:
     app.kubernetes.io/component: database-proxy
 spec:
   type: ClusterIP
-  internalTrafficPolicy: Cluster
+  # Database client Pods are constrained to these proxy-ready nodes. Keeping
+  # traffic local prevents a static EndpointSlice from selecting a dead node.
+  internalTrafficPolicy: Local
   ports:
     - name: postgres
       port: {{ .Values.database.proxy.port }}
