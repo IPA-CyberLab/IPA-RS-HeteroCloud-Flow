@@ -43,11 +43,11 @@ helm template flow "$chart_dir" -f "$environment_values" \
   --namespace heterocloud-flow >"$tmp_dir/all.yaml"
 test "$(grep -c '^  replicas: 7$' "$tmp_dir/all.yaml")" -eq 4
 test "$(grep -c '^  replicas: 6$' "$tmp_dir/all.yaml")" -eq 2
-grep -Eq 'sentinel monitor flowmaster .* 6379 2' "$tmp_dir/all.yaml"
-for index in 0 1 2; do
+grep -Eq 'sentinel monitor flowmaster .* 6379 3' "$tmp_dir/all.yaml"
+for index in 0 1 2 3 4; do
   grep -Fq "heterocloud-flow-redis-node-${index}.heterocloud-flow-redis-headless.heterocloud-flow.svc.cluster.local:26379" "$tmp_dir/all.yaml"
 done
-grep -q '^  internalTrafficPolicy: Local$' "$tmp_dir/all.yaml"
+grep -q '^  internalTrafficPolicy: Cluster$' "$tmp_dir/all.yaml"
 grep -q 'nodeName: "ichikawap1"' "$tmp_dir/all.yaml"
 grep -q -- '- "10.250.0.8"' "$tmp_dir/database-proxy.yaml"
 grep -q 'nodeName: "uc-k8sv1"' "$tmp_dir/database-proxy.yaml"

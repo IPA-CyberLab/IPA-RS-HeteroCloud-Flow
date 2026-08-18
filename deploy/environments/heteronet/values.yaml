@@ -250,7 +250,7 @@ redis:
     tag: ""
     digest: sha256:08863c2c3f4e051fb6139b38fa223e9c13be5033326a59bead182860d899bf98
   sentinel:
-    quorum: 2
+    quorum: 3
     image:
       tag: ""
       digest: sha256:ae75dd69c192a632bdeb21baa6721080be5b12347e52add922036398b47631da
@@ -262,8 +262,9 @@ redis:
       minAvailable: 1
   replica:
     # Redis/Sentinel is stateful control data, not a forwarded public workload.
-    # Keep its quorum on the three always-on control-plane nodes.
-    replicaCount: 3
+    # Five control-plane placements retain a three-voter quorum after any two
+    # node failures.
+    replicaCount: 5
     podAntiAffinityPreset: hard
     nodeSelector:
       node-role.kubernetes.io/control-plane: ""
@@ -275,7 +276,7 @@ redis:
       enabled: false
     pdb:
       create: true
-      minAvailable: 2
+      minAvailable: 3
 
 postgresql-ha:
   enabled: false
