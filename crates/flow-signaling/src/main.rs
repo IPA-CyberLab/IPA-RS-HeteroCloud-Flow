@@ -41,10 +41,22 @@ use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 use uuid::Uuid;
+
+const REDIS_RECONNECT_ATTEMPTS: usize = 4;
+const REDIS_RECONNECT_BACKOFF: Duration = Duration::from_millis(100);
+const REDIS_RECONNECT_MAX_EXPONENT: usize = 3;
+const REDIS_SUBSCRIBER_BUFFER: usize = 256;
+const REDIS_PUBLISHER_BUFFER: usize = 256;
+
+fn redis_reconnect_delay(attempt: usize) -> Duration {
+    let exponent = attempt.min(REDIS_RECONNECT_MAX_EXPONENT);
+    REDIS_RECONNECT_BACKOFF.saturating_mul(1_u32 << exponent)
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -65,7 +77,13 @@ struct RelaySession {
     connection_id: Uuid,
     known_peer_connections: HashSet<Uuid>,
     store: PgStore,
+    redis: Arc<RedisBackend>,
     heartbeat_interval: Duration,
+}
+
+enum SubscriberEvent {
+    Message(redis::Msg),
+    Failed(String),
 }
 
 struct Config {
@@ -409,10 +427,10 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid, cl
     };
 
     let channel = channel_name(&principal, room.id);
-    let client = match state.redis.client().await {
-        Ok(client) => client,
+    let subscriber = match subscribe_to_channel(&state.redis, &channel).await {
+        Ok(subscriber) => subscriber,
         Err(error) => {
-            warn!(%error, "failed to resolve Redis master");
+            warn!(%error, "failed to subscribe to signaling channel");
             send_protocol_error(
                 &mut socket,
                 "signaling_unavailable",
@@ -422,18 +440,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid, cl
             return;
         }
     };
-    let mut subscriber = match client.get_async_pubsub().await {
-        Ok(subscriber) => subscriber,
-        Err(error) => {
-            warn!(%error, "failed to open Redis subscriber");
-            return;
-        }
-    };
-    if let Err(error) = subscriber.subscribe(&channel).await {
-        warn!(%error, "failed to subscribe to signaling channel");
-        return;
-    }
-    let mut publisher = match client.get_multiplexed_async_connection().await {
+    let mut publisher = match connect_publisher(&state.redis).await {
         Ok(connection) => connection,
         Err(error) => {
             warn!(%error, "failed to open Redis publisher");
@@ -481,10 +488,12 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid, cl
         .await
         .is_err()
     {
-        close_and_publish_departure(&state.store, &mut publisher, &channel, peer).await;
+        close_and_publish_departure(&state.store, &state.redis, &mut publisher, &channel, peer)
+            .await;
         return;
     }
     if let Err(error) = publish_frame(
+        &state.redis,
         &mut publisher,
         &channel,
         &PublishedFrame::PeerJoined { peer },
@@ -498,7 +507,8 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid, cl
             "signaling backend is unavailable",
         )
         .await;
-        close_and_publish_departure(&state.store, &mut publisher, &channel, peer).await;
+        close_and_publish_departure(&state.store, &state.redis, &mut publisher, &channel, peer)
+            .await;
         return;
     }
     persist_open_audit(&state.store, &principal, room_id, connection_id).await;
@@ -513,6 +523,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid, cl
             connection_id,
             known_peer_connections,
             store: state.store.clone(),
+            redis: state.redis.clone(),
             heartbeat_interval: state.heartbeat_interval,
         },
     )
@@ -571,8 +582,8 @@ async fn authenticate(
 
 async fn relay(
     socket: WebSocket,
-    mut subscriber: redis::aio::PubSub,
-    mut publisher: redis::aio::MultiplexedConnection,
+    subscriber: redis::aio::PubSubStream,
+    publisher: redis::aio::MultiplexedConnection,
     channel: String,
     session: RelaySession,
 ) -> u64 {
@@ -581,10 +592,26 @@ async fn relay(
         connection_id,
         mut known_peer_connections,
         store,
+        redis,
         heartbeat_interval,
     } = session;
     let (mut sender, mut receiver) = socket.split();
-    let mut redis_messages = subscriber.on_message();
+    let (subscriber_sender, mut subscriber_messages) = mpsc::channel(REDIS_SUBSCRIBER_BUFFER);
+    let subscriber_task = tokio::spawn(forward_subscriber_messages(
+        redis.clone(),
+        channel.clone(),
+        subscriber,
+        subscriber_sender,
+    ));
+    let (publisher_sender, publisher_receiver) = mpsc::channel(REDIS_PUBLISHER_BUFFER);
+    let (publisher_failure_sender, mut publisher_failures) = mpsc::channel(1);
+    let publisher_task = tokio::spawn(forward_publisher_frames(
+        redis.clone(),
+        channel.clone(),
+        publisher,
+        publisher_receiver,
+        publisher_failure_sender,
+    ));
     let mut count = 0_u64;
     let auth_remaining = (principal.expires_at - Utc::now())
         .to_std()
@@ -678,13 +705,19 @@ async fn relay(
                             connection_id,
                             sent_at: Utc::now(),
                         };
-                        if let Err(error) =
-                            publish_frame(&mut publisher, &channel, &outbound_signal).await
-                        {
-                            warn!(%error, "failed to publish signaling frame");
-                            break;
+                        match publisher_sender.try_send(outbound_signal) {
+                            Ok(()) => count = count.saturating_add(1),
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                warn!(%connection_id, "Redis signaling publish queue is full");
+                                send_protocol_error_to_sink(
+                                    &mut sender,
+                                    "signaling_unavailable",
+                                    "signaling backend is recovering",
+                                ).await;
+                                break;
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => break,
                         }
-                        count = count.saturating_add(1);
                     }
                     Ok(Message::Ping(payload)) => {
                         if sender.send(Message::Pong(payload)).await.is_err() {
@@ -695,9 +728,14 @@ async fn relay(
                     Ok(Message::Pong(_) | Message::Binary(_)) => {}
                 }
             }
-            redis_message = redis_messages.next() => {
-                let Some(redis_message) = redis_message else {
-                    break;
+            subscriber_event = subscriber_messages.recv() => {
+                let redis_message = match subscriber_event {
+                    Some(SubscriberEvent::Message(redis_message)) => redis_message,
+                    Some(SubscriberEvent::Failed(error)) => {
+                        warn!(%error, "Redis subscriber recovery was exhausted");
+                        break;
+                    }
+                    None => break,
                 };
                 let payload: String = match redis_message.get_payload() {
                     Ok(payload) => payload,
@@ -745,14 +783,164 @@ async fn relay(
                     break;
                 }
             }
+            Some(error) = publisher_failures.recv() => {
+                warn!(%error, %connection_id, "Redis signaling publisher recovery was exhausted");
+                break;
+            }
         }
     }
+    subscriber_task.abort();
+    let _ = subscriber_task.await;
     let peer = SignalingPeer {
         connection_id,
         principal_id: principal.principal_id,
     };
-    close_and_publish_departure(&store, &mut publisher, &channel, peer).await;
+    close_signaling_connection(&store, connection_id).await;
+    let departure_queued = publisher_sender
+        .send(PublishedFrame::PeerLeft { peer })
+        .await
+        .is_ok();
+    drop(publisher_sender);
+    let publisher_result = publisher_task
+        .await
+        .map_err(|error| error.to_string())
+        .and_then(|result| result);
+    if !departure_queued || publisher_result.is_err() {
+        match connect_publisher(&redis).await {
+            Ok(mut publisher) => {
+                if let Err(error) = publish_frame(
+                    &redis,
+                    &mut publisher,
+                    &channel,
+                    &PublishedFrame::PeerLeft { peer },
+                )
+                .await
+                {
+                    warn!(%error, "failed to publish signaling departure after recovery");
+                }
+            }
+            Err(error) => warn!(%error, "failed to recover Redis publisher for departure"),
+        }
+    }
     count
+}
+
+async fn subscribe_to_channel(
+    redis: &RedisBackend,
+    channel: &str,
+) -> Result<redis::aio::PubSubStream, String> {
+    let mut last_error = "Redis subscriber connection failed".to_owned();
+    for attempt in 0..REDIS_RECONNECT_ATTEMPTS {
+        let result = async {
+            let client = redis.client().await.map_err(|error| error.to_string())?;
+            let mut subscriber = client
+                .get_async_pubsub()
+                .await
+                .map_err(|error| error.to_string())?;
+            subscriber
+                .subscribe(channel)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok::<_, String>(subscriber.into_on_message())
+        }
+        .await;
+        match result {
+            Ok(subscriber) => return Ok(subscriber),
+            Err(error) => {
+                last_error = error;
+                if attempt + 1 < REDIS_RECONNECT_ATTEMPTS {
+                    warn!(
+                        attempt = attempt + 1,
+                        error = %last_error,
+                        "Redis signaling subscription failed; retrying"
+                    );
+                    tokio::time::sleep(redis_reconnect_delay(attempt)).await;
+                }
+            }
+        }
+    }
+    Err(last_error)
+}
+
+async fn forward_subscriber_messages(
+    redis: Arc<RedisBackend>,
+    channel: String,
+    mut subscriber: redis::aio::PubSubStream,
+    sender: mpsc::Sender<SubscriberEvent>,
+) {
+    loop {
+        while let Some(message) = subscriber.next().await {
+            if sender
+                .send(SubscriberEvent::Message(message))
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+
+        warn!(%channel, "Redis signaling subscriber ended; resolving current master");
+        match subscribe_to_channel(&redis, &channel).await {
+            Ok(next_subscriber) => {
+                info!(%channel, "Redis signaling subscriber recovered");
+                subscriber = next_subscriber;
+            }
+            Err(error) => {
+                let _ = sender.send(SubscriberEvent::Failed(error)).await;
+                return;
+            }
+        }
+    }
+}
+
+async fn forward_publisher_frames(
+    redis: Arc<RedisBackend>,
+    channel: String,
+    mut publisher: redis::aio::MultiplexedConnection,
+    mut frames: mpsc::Receiver<PublishedFrame>,
+    failures: mpsc::Sender<String>,
+) -> Result<redis::aio::MultiplexedConnection, String> {
+    while let Some(frame) = frames.recv().await {
+        if let Err(error) = publish_frame(&redis, &mut publisher, &channel, &frame).await {
+            let _ = failures.send(error.clone()).await;
+            return Err(error);
+        }
+    }
+    Ok(publisher)
+}
+
+async fn connect_publisher(
+    redis: &RedisBackend,
+) -> Result<redis::aio::MultiplexedConnection, String> {
+    let mut last_error = "Redis publisher connection failed".to_owned();
+    for attempt in 0..REDIS_RECONNECT_ATTEMPTS {
+        let result = connect_publisher_once(redis).await;
+        match result {
+            Ok(publisher) => return Ok(publisher),
+            Err(error) => {
+                last_error = error;
+                if attempt + 1 < REDIS_RECONNECT_ATTEMPTS {
+                    warn!(
+                        attempt = attempt + 1,
+                        error = %last_error,
+                        "Redis signaling publisher connection failed; retrying"
+                    );
+                    tokio::time::sleep(redis_reconnect_delay(attempt)).await;
+                }
+            }
+        }
+    }
+    Err(last_error)
+}
+
+async fn connect_publisher_once(
+    redis: &RedisBackend,
+) -> Result<redis::aio::MultiplexedConnection, String> {
+    let client = redis.client().await.map_err(|error| error.to_string())?;
+    client
+        .get_multiplexed_async_connection()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn close_signaling_connection(store: &PgStore, connection_id: Uuid) {
@@ -763,12 +951,19 @@ async fn close_signaling_connection(store: &PgStore, connection_id: Uuid) {
 
 async fn close_and_publish_departure(
     store: &PgStore,
+    redis: &RedisBackend,
     publisher: &mut redis::aio::MultiplexedConnection,
     channel: &str,
     peer: SignalingPeer,
 ) {
     close_signaling_connection(store, peer.connection_id).await;
-    if let Err(error) = publish_frame(publisher, channel, &PublishedFrame::PeerLeft { peer }).await
+    if let Err(error) = publish_frame(
+        redis,
+        publisher,
+        channel,
+        &PublishedFrame::PeerLeft { peer },
+    )
+    .await
     {
         warn!(%error, "failed to publish signaling departure");
     }
@@ -827,16 +1022,39 @@ where
 }
 
 async fn publish_frame(
+    redis: &RedisBackend,
     publisher: &mut redis::aio::MultiplexedConnection,
     channel: &str,
     frame: &PublishedFrame,
 ) -> Result<(), String> {
     let serialized = serde_json::to_string(frame).map_err(|error| error.to_string())?;
-    let _: usize = publisher
-        .publish(channel, serialized)
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(())
+    let mut last_error = "Redis publish failed".to_owned();
+    for attempt in 0..REDIS_RECONNECT_ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(redis_reconnect_delay(attempt - 1)).await;
+            match connect_publisher_once(redis).await {
+                Ok(reconnected) => *publisher = reconnected,
+                Err(error) => {
+                    last_error = error;
+                    continue;
+                }
+            }
+        }
+        match publisher.publish::<_, _, usize>(channel, &serialized).await {
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                last_error = error.to_string();
+                if attempt + 1 < REDIS_RECONNECT_ATTEMPTS {
+                    warn!(
+                        attempt = attempt + 1,
+                        error = %last_error,
+                        "Redis signaling publish failed; resolving current master"
+                    );
+                }
+            }
+        }
+    }
+    Err(last_error)
 }
 
 fn channel_name(principal: &PrincipalContext, room_id: Uuid) -> String {
@@ -1022,8 +1240,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        AppState, SignalKind, enforce_ip_rate_limit, live, parse_signal, ready,
-        send_protocol_error_to_sink, signal_upgrade,
+        AppState, REDIS_RECONNECT_ATTEMPTS, SignalKind, enforce_ip_rate_limit, live, parse_signal,
+        ready, redis_reconnect_delay, send_protocol_error_to_sink, signal_upgrade,
     };
 
     const PRINCIPAL_SECRET: &[u8] = b"signaling-test-principal-secret-at-least-32-bytes";
@@ -1059,6 +1277,25 @@ mod tests {
         ) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
+    }
+
+    #[test]
+    fn redis_reconnect_backoff_is_bounded() {
+        let delays = (0..REDIS_RECONNECT_ATTEMPTS - 1)
+            .map(redis_reconnect_delay)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            delays,
+            vec![
+                Duration::from_millis(100),
+                Duration::from_millis(200),
+                Duration::from_millis(400),
+            ]
+        );
+        assert_eq!(
+            redis_reconnect_delay(usize::MAX),
+            Duration::from_millis(800)
+        );
     }
 
     #[test]
