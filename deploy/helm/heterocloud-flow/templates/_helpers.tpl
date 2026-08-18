@@ -132,6 +132,25 @@ podAntiAffinity:
             app.kubernetes.io/component: {{ .component }}
 {{- end }}
 
+{{- define "flow.databaseNodeAffinity" -}}
+{{- if and .Values.database.proxy.enabled (gt (len .Values.database.proxy.endpointNodeNames) 0) -}}
+{{- $nodes := list -}}
+{{- range $_, $node := .Values.database.proxy.endpointNodeNames -}}
+{{- $nodes = append $nodes $node -}}
+{{- end -}}
+nodeAffinity:
+  requiredDuringSchedulingIgnoredDuringExecution:
+    nodeSelectorTerms:
+      - matchExpressions:
+          - key: kubernetes.io/hostname
+            operator: In
+            values:
+              {{- range sortAlpha (uniq $nodes) }}
+              - {{ . | quote }}
+              {{- end }}
+{{- end -}}
+{{- end }}
+
 {{- define "flow.turnUrls" -}}
 {{- $root := . -}}
 {{- $urls := list -}}

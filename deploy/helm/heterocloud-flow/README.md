@@ -79,10 +79,10 @@ overlay sets:
 - API, matchmaker, and signaling stay on the Pod network and use forwarded
   Services; only coturn uses direct host networking. LiveKit also stays on the
   Pod network and is reached through the forwarded public gateway.
-- five replicas of each forwarded workload; database clients select nodes with
-  `database.heteronetwork.io/proxy-ready=true`, while LiveKit and Prometheus
-  spread across every Kubernetes node; coturn alone is selected onto the three
-  `public-ingress=true` nodes
+- seven replicas of each forwarded workload; database clients use required
+  node affinity generated from the five configured node-local proxy endpoints,
+  while LiveKit and Prometheus spread across every Kubernetes node; coturn
+  alone is selected onto the `public-ingress=true` nodes
 - explicit coturn `direct-public` relay addressing; each VPN `status.hostIP`
   selects a public IPv4 address that is locally assigned on the same host, and
   coturn binds its relay socket directly to that public address
@@ -90,7 +90,7 @@ overlay sets:
   Service on the VPN addresses and port `55432`; Flow rewrites only the host
   and port of the Secret-provided URL at startup, leaving credentials and TLS
   parameters outside Helm values
-- pools of API `6 x 5`, matchmaker `3 x 5`, signaling `4 x 5`: 65 steady-state
+- pools of API `6 x 7`, matchmaker `3 x 7`, signaling `4 x 7`: 91 steady-state
   maximum connections
 - API startup migrations enabled and the standalone migration Job disabled, so
   migration uses the same local proxy and API connection pools

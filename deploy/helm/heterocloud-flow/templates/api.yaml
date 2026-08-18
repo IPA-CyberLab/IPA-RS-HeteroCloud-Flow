@@ -40,6 +40,7 @@ spec:
         {{- include "flow.topologySpread" (dict "root" . "component" "api") | nindent 8 }}
       affinity:
         {{- include "flow.requiredPodAntiAffinity" (dict "root" . "component" "api") | nindent 8 }}
+        {{- include "flow.databaseNodeAffinity" . | nindent 8 }}
       terminationGracePeriodSeconds: 30
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets:

@@ -23,8 +23,13 @@ for component in prometheus grafana; do
 done
 
 for component in api matchmaker signaling; do
-  grep -q '^      nodeSelector:$' "$tmp_dir/${component}.yaml"
-  grep -q 'database.heteronetwork.io/proxy-ready: "true"' "$tmp_dir/${component}.yaml"
+  ! grep -q '^      nodeSelector:$' "$tmp_dir/${component}.yaml"
+  grep -q '^          requiredDuringSchedulingIgnoredDuringExecution:$' "$tmp_dir/${component}.yaml"
+  for node in ichikawap1 uc-k8s3p uc-k8sp1 uc-k8sp2 uc-k8sv1; do
+    grep -q -- "- \"$node\"" "$tmp_dir/${component}.yaml"
+  done
+  ! grep -q -- '- "mizuame-nucboxg5"' "$tmp_dir/${component}.yaml"
+  ! grep -q -- '- "mizuame"' "$tmp_dir/${component}.yaml"
 done
 
 for component in livekit prometheus grafana; do

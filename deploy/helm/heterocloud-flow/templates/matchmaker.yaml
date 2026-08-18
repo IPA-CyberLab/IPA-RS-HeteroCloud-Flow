@@ -39,6 +39,7 @@ spec:
         {{- include "flow.topologySpread" (dict "root" . "component" "matchmaker") | nindent 8 }}
       affinity:
         {{- include "flow.requiredPodAntiAffinity" (dict "root" . "component" "matchmaker") | nindent 8 }}
+        {{- include "flow.databaseNodeAffinity" . | nindent 8 }}
       terminationGracePeriodSeconds: 30
       containers:
         - name: matchmaker

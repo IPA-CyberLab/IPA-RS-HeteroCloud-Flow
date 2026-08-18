@@ -29,6 +29,10 @@ spec:
       {{- end }}
       securityContext:
         {{- include "flow.podSecurityContext" . | nindent 8 }}
+      {{- if and .Values.database.proxy.enabled (gt (len .Values.database.proxy.endpointNodeNames) 0) }}
+      affinity:
+        {{- include "flow.databaseNodeAffinity" . | nindent 8 }}
+      {{- end }}
       containers:
         - name: migrate
           image: {{ include "flow.image" . }}

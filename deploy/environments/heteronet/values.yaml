@@ -36,8 +36,9 @@ rateLimit:
     - ::1/128
 
 database:
-  # Database clients run only where the node-local PostgreSQL HAProxy is ready.
-  # Media and monitoring workloads remain eligible on every Kubernetes node.
+  # Database clients run only on endpointNodeNames. The chart turns this map
+  # into required node affinity, so stale node labels cannot place a client on
+  # a host without a node-local PostgreSQL HAProxy.
   externalPort: 25432
   # Pod-network workloads use the VPN-bound HAProxy listeners through a
   # selector-free Service. The Secret can continue to contain the legacy
@@ -57,8 +58,7 @@ database:
       "10.250.0.6": uc-k8s3p
       "10.250.0.8": uc-k8sv1
       "10.250.0.10": ichikawap1
-  nodeSelector:
-    database.heteronetwork.io/proxy-ready: "true"
+  nodeSelector: {}
   maxConnections:
     api: 6
     matchmaker: 3
@@ -69,8 +69,7 @@ database:
     enabled: false
 
 api:
-  # Keep a Flow API endpoint on every HeteroNetwork node. The added
-  # ichikawap1 worker therefore participates in normal Service balancing.
+  # Seven replicas are balanced over the five node-local DB proxy hosts.
   replicaCount: 7
   publicUrls:
     - https://flow.heterocloud.mizuame.app
