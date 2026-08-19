@@ -60,9 +60,9 @@ database:
       "10.250.0.10": ichikawap1
   nodeSelector: {}
   maxConnections:
-    api: 6
-    matchmaker: 3
-    signaling: 4
+    api: 8
+    matchmaker: 4
+    signaling: 8
   # API pods use their local 127.0.0.1:25432 proxy and sqlx migration lock.
   migrateOnApiStart: true
   migrationJob:

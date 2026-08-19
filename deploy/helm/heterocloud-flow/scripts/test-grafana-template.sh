@@ -15,6 +15,8 @@ helm template heterocloud-flow "$chart_dir" \
 grep -q 'replicas: 6' "$work_dir/grafana.yaml"
 grep -q 'hostNetwork: true' "$work_dir/grafana.yaml"
 grep -q 'targetPort: 13000' "$work_dir/grafana.yaml"
+grep -A1 -F 'name: GF_DATABASE_MAX_OPEN_CONN' "$work_dir/grafana.yaml" | grep -Fq 'value: "5"'
+grep -A1 -F 'name: GF_DATABASE_MAX_IDLE_CONN' "$work_dir/grafana.yaml" | grep -Fq 'value: "2"'
 if grep -q 'containerPort: 13000' "$work_dir/grafana.yaml"; then
   echo "host-network Grafana rendered a redundant CRI host-port reservation" >&2
   exit 1
