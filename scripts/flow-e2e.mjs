@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import process from "node:process";
@@ -98,6 +99,7 @@ async function request(path, method, headers, body) {
     if (!response.ok) {
       const retryable = [502, 503, 504].includes(response.status);
       const error = new Error(`HTTP ${response.status} ${method} ${path}: ${JSON.stringify(parsed)}`);
+      error.status = response.status;
       error.retryable = retryable;
       throw error;
     }
@@ -105,6 +107,28 @@ async function request(path, method, headers, body) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function createRoomWithRetry(headers) {
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      return await request("/v1/rooms", "POST", headers, {
+        mode: "p2p",
+        name: `flow-e2e-${Date.now()}-${randomUUID()}`,
+        max_participants: 2,
+        metadata: { test: "flow-e2e", iteration },
+      });
+    } catch (error) {
+      lastError = error;
+      const mayHaveCreatedRoom = error.retryable || error.status === 409;
+      if (!mayHaveCreatedRoom || attempt === 3) {
+        throw error;
+      }
+      await sleep(250 * (attempt + 1));
+    }
+  }
+  throw lastError;
 }
 
 async function requestWithRetry(path, method, headers, body) {
@@ -379,12 +403,7 @@ try {
     const started = new Date().toISOString();
     try {
       const headers = loadContext();
-      const room = await requestWithRetry("/v1/rooms", "POST", headers, {
-        mode: "p2p",
-        name: `flow-e2e-${Date.now()}`,
-        max_participants: 2,
-        metadata: { test: "flow-e2e", iteration },
-      });
+      const room = await createRoomWithRetry(headers);
       if (!room?.id) throw new Error("room creation response omitted id");
       const joinBody = { display_name: "flow-e2e" };
       const [joinA, joinB] = await Promise.all([
