@@ -402,26 +402,22 @@ spec:
               value: /etc/grafana/dashboards/heterocloud-flow.json
             - name: GF_DATE_FORMATS_DEFAULT_TIMEZONE
               value: browser
-          ports:
-            - name: http
-              containerPort: {{ $grafana.listenPort }}
-              protocol: TCP
           readinessProbe:
             httpGet:
               path: /api/health
-              port: http
+              port: {{ $grafana.listenPort }}
             periodSeconds: 10
             timeoutSeconds: 3
           livenessProbe:
             httpGet:
               path: /api/health
-              port: http
+              port: {{ $grafana.listenPort }}
             periodSeconds: 15
             timeoutSeconds: 3
           startupProbe:
             httpGet:
               path: /api/health
-              port: http
+              port: {{ $grafana.listenPort }}
             failureThreshold: 30
             periodSeconds: 5
             timeoutSeconds: 3
@@ -539,7 +535,7 @@ spec:
   ports:
     - name: http
       port: {{ $grafana.service.port }}
-      targetPort: http
+      targetPort: {{ $grafana.listenPort }}
       protocol: TCP
       appProtocol: http
 {{- end }}

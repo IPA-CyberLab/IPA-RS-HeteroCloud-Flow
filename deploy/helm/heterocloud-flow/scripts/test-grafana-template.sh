@@ -14,7 +14,11 @@ helm template heterocloud-flow "$chart_dir" \
 
 grep -q 'replicas: 6' "$work_dir/grafana.yaml"
 grep -q 'hostNetwork: true' "$work_dir/grafana.yaml"
-grep -q 'containerPort: 33000' "$work_dir/grafana.yaml"
+grep -q 'targetPort: 33000' "$work_dir/grafana.yaml"
+if grep -q 'containerPort: 33000' "$work_dir/grafana.yaml"; then
+  echo "host-network Grafana rendered a redundant CRI host-port reservation" >&2
+  exit 1
+fi
 grep -q 'grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63' "$work_dir/grafana.yaml"
 grep -q 'kind: PodDisruptionBudget' "$work_dir/grafana.yaml"
 grep -q 'minAvailable: 3' "$work_dir/grafana.yaml"
