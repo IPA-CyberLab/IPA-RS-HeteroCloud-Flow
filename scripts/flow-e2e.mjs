@@ -10,6 +10,8 @@ const apiUrl = (process.env.FLOW_API_URL || "https://flow.heterocloud.mizuame.ap
 const durationSeconds = numberEnv("FLOW_DURATION_SECONDS", 600, 10, 86_400);
 const intervalSeconds = numberEnv("FLOW_INTERVAL_SECONDS", 30, 5, 3_600);
 const requestTimeoutMs = numberEnv("FLOW_REQUEST_TIMEOUT_MS", 30_000, 1_000, 120_000);
+const connectionAttempts = numberEnv("FLOW_CONNECTION_ATTEMPTS", 3, 1, 10);
+const connectionRetryDelayMs = numberEnv("FLOW_CONNECTION_RETRY_DELAY_MS", 1_000, 100, 30_000);
 const playwrightModule = process.env.PLAYWRIGHT_MODULE || "playwright";
 const hostResolverRules = process.env.FLOW_HOST_RESOLVER_RULES || "";
 const iceTransportPolicy = process.env.FLOW_ICE_TRANSPORT_POLICY === "relay" ? "relay" : "all";
@@ -31,6 +33,12 @@ function numberEnv(name, fallback, minimum, maximum) {
 
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function retryableConnectionError(error) {
+  if (error?.retryable) return true;
+  return /(?:HTTP 50[234]|request failed|signaling socket|WebRTC connection timed out|connection state (?:failed|closed)|selected candidate pair was not reported)/i
+    .test(String(error?.stack || error));
 }
 
 function normalizeHeaders(value) {
@@ -402,40 +410,68 @@ try {
     iteration += 1;
     const started = new Date().toISOString();
     try {
-      const headers = loadContext();
-      const room = await createRoomWithRetry(headers);
-      if (!room?.id) throw new Error("room creation response omitted id");
-      const joinBody = { display_name: "flow-e2e" };
-      const [joinA, joinB] = await Promise.all([
-        requestWithRetry(`/v1/rooms/${room.id}/join`, "POST", headers, joinBody),
-        requestWithRetry(`/v1/rooms/${room.id}/join`, "POST", headers, joinBody),
-      ]);
-      if (joinA.mode !== "p2p" || joinB.mode !== "p2p") throw new Error("join response was not p2p");
-      for (const join of [joinA, joinB]) {
-        const urls = join.connection?.ice?.ice_servers?.flatMap((server) =>
-          (Array.isArray(server.urls) ? server.urls : [server.urls]).filter(Boolean),
-        ) || [];
-        if (!urls.some((url) => String(url).startsWith("stun:"))) throw new Error("STUN was not issued");
-        if (!urls.some((url) => String(url).startsWith("turn:") && String(url).includes("transport=udp"))) {
-          throw new Error("UDP TURN was not issued");
-        }
-        if (!urls.some((url) => String(url).startsWith("turn:") && String(url).includes("transport=tcp"))) {
-          throw new Error("TCP TURN was not issued");
+      let completed;
+      let lastError;
+      for (let attempt = 1; attempt <= connectionAttempts; attempt += 1) {
+        try {
+          const headers = loadContext();
+          const room = await createRoomWithRetry(headers);
+          if (!room?.id) throw new Error("room creation response omitted id");
+          const joinBody = { display_name: "flow-e2e" };
+          const [joinA, joinB] = await Promise.all([
+            requestWithRetry(`/v1/rooms/${room.id}/join`, "POST", headers, joinBody),
+            requestWithRetry(`/v1/rooms/${room.id}/join`, "POST", headers, joinBody),
+          ]);
+          if (joinA.mode !== "p2p" || joinB.mode !== "p2p") throw new Error("join response was not p2p");
+          for (const join of [joinA, joinB]) {
+            const urls = join.connection?.ice?.ice_servers?.flatMap((server) =>
+              (Array.isArray(server.urls) ? server.urls : [server.urls]).filter(Boolean),
+            ) || [];
+            if (!urls.some((url) => String(url).startsWith("stun:"))) throw new Error("STUN was not issued");
+            if (!urls.some((url) => String(url).startsWith("turn:") && String(url).includes("transport=udp"))) {
+              throw new Error("UDP TURN was not issued");
+            }
+            if (!urls.some((url) => String(url).startsWith("turn:") && String(url).includes("transport=tcp"))) {
+              throw new Error("TCP TURN was not issued");
+            }
+          }
+          const context = await browser.newContext();
+          const pageA = await context.newPage();
+          const pageB = await context.newPage();
+          try {
+            const peers = await connectPeers(pageA, pageB, joinA.connection, joinB.connection, headers);
+            if (!peers.every((peer) => peer.state === "connected")) {
+              throw new Error(`WebRTC did not reach connected state: ${JSON.stringify(peers)}`);
+            }
+            completed = { room, peers, attempt };
+          } finally {
+            await context.close();
+          }
+          break;
+        } catch (error) {
+          lastError = error;
+          const retryable = retryableConnectionError(error);
+          console.error(JSON.stringify({
+            iteration,
+            attempt,
+            started_at: started,
+            status: retryable && attempt < connectionAttempts ? "retrying" : "attempt_failed",
+            error: String(error?.stack || error),
+          }));
+          if (!retryable || attempt === connectionAttempts) throw error;
+          await sleep(connectionRetryDelayMs * attempt);
         }
       }
-      const context = await browser.newContext();
-      const pageA = await context.newPage();
-      const pageB = await context.newPage();
-      try {
-        const peers = await connectPeers(pageA, pageB, joinA.connection, joinB.connection, headers);
-        if (!peers.every((peer) => peer.state === "connected")) {
-          throw new Error(`WebRTC did not reach connected state: ${JSON.stringify(peers)}`);
-        }
-        passed += 1;
-        console.log(JSON.stringify({ iteration, room_id: room.id, started_at: started, status: "passed", peers }));
-      } finally {
-        await context.close();
-      }
+      if (!completed) throw lastError || new Error("Flow connection attempts did not complete");
+      passed += 1;
+      console.log(JSON.stringify({
+        iteration,
+        attempt: completed.attempt,
+        room_id: completed.room.id,
+        started_at: started,
+        status: "passed",
+        peers: completed.peers,
+      }));
     } catch (error) {
       console.error(JSON.stringify({ iteration, started_at: started, status: "failed", error: String(error?.stack || error) }));
       process.exitCode = 1;
