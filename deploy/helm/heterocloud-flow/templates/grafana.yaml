@@ -418,7 +418,7 @@ spec:
             httpGet:
               path: /api/health
               port: {{ $grafana.listenPort }}
-            failureThreshold: 30
+            failureThreshold: 60
             periodSeconds: 5
             timeoutSeconds: 3
           resources:
