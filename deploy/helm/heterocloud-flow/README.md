@@ -10,9 +10,10 @@
 - Per-node managed HeteroNetwork Caddy for browser-facing HTTPS/WSS
 
 The chart runs three replicas each of `flow-api`, `flow-matchmaker`,
-`flow-signaling`, LiveKit, and coturn. Required hostname anti-affinity and
-`DoNotSchedule` topology spread prevent two replicas of one component from
-sharing a node.
+`flow-signaling`, LiveKit, and coturn. Forwarded components prefer an even
+topology spread but use `ScheduleAnyway` when smaller nodes run out of
+capacity. Direct TURN pools retain a strict `DoNotSchedule` spread so each
+mapped public node receives at most one replica.
 
 ## Secret
 

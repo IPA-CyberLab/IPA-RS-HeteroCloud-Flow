@@ -110,7 +110,7 @@ seccompProfile:
 {{- define "flow.topologySpread" -}}
 - maxSkew: 1
   topologyKey: kubernetes.io/hostname
-  whenUnsatisfiable: DoNotSchedule
+  whenUnsatisfiable: ScheduleAnyway
   # Unreachable nodes receive NoSchedule/NoExecute taints. Excluding those
   # domains lets replicas rebalance onto the remaining healthy nodes.
   nodeTaintsPolicy: Honor
