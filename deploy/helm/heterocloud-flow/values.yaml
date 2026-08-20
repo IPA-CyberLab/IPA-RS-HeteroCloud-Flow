@@ -279,6 +279,7 @@ monitoring:
         sizeLimit: 10Gi
       hostPath: ""
     nodeSelector: {}
+    allowedNodes: []
     tolerations: []
     podDisruptionBudget:
       enabled: false
@@ -317,6 +318,7 @@ monitoring:
       enabled: false
       sourceCidrs: []
     nodeSelector: {}
+    allowedNodes: []
     tolerations: []
     podDisruptionBudget:
       enabled: false

@@ -487,8 +487,9 @@ spec:
           emptyDir:
             sizeLimit: {{ $prometheus.storage.emptyDir.sizeLimit }}
           {{- end }}
-      {{- if gt $replicaCount 1 }}
+      {{- if or (gt $replicaCount 1) $prometheus.allowedNodes }}
       affinity:
+        {{- if gt $replicaCount 1 }}
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             - topologyKey: kubernetes.io/hostname
@@ -496,6 +497,17 @@ spec:
                 matchLabels:
                   {{- include "flow.selectorLabels" . | nindent 18 }}
                   app.kubernetes.io/component: prometheus
+        {{- end }}
+        {{- with $prometheus.allowedNodes }}
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      {{- toYaml . | nindent 22 }}
+        {{- end }}
       {{- end }}
       {{- with $prometheus.nodeSelector }}
       nodeSelector:

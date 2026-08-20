@@ -471,8 +471,9 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 256Mi
-      {{- if gt $replicaCount 1 }}
+      {{- if or (gt $replicaCount 1) $grafana.allowedNodes }}
       affinity:
+        {{- if gt $replicaCount 1 }}
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             - topologyKey: kubernetes.io/hostname
@@ -480,6 +481,17 @@ spec:
                 matchLabels:
                   {{- include "flow.selectorLabels" . | nindent 18 }}
                   app.kubernetes.io/component: grafana
+        {{- end }}
+        {{- with $grafana.allowedNodes }}
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      {{- toYaml . | nindent 22 }}
+        {{- end }}
       {{- end }}
       {{- with $grafana.nodeSelector }}
       nodeSelector:

@@ -214,7 +214,7 @@ coturn:
 monitoring:
   prometheus:
     enabled: true
-    replicaCount: 6
+    replicaCount: 3
     service:
       type: LoadBalancer
       loadBalancerClass: heteronetwork.io/public
@@ -237,15 +237,19 @@ monitoring:
     storage:
       type: hostPath
       hostPath: /var/lib/heterocloud-flow/prometheus
-    # Every node keeps a bounded local TSDB. A failed node loses one copy
-    # without interrupting queries or exhausting smaller root filesystems.
+    # Keep constant TSDB writes away from the two low-IOPS etcd members.
+    # Three independent copies still leave one query endpoint after two faults.
     nodeSelector: {}
+    allowedNodes:
+      - ichikawap1
+      - uc-k8s3p
+      - uc-k8sv1
     podDisruptionBudget:
       enabled: true
-      minAvailable: 3
+      minAvailable: 1
   grafana:
     enabled: true
-    replicaCount: 6
+    replicaCount: 3
     # Port 3000 is already occupied by an unrelated host service on one worker.
     # The LoadBalancer remains on 3000 and targets this private listener.
     listenPort: 13000
@@ -261,9 +265,13 @@ monitoring:
       sourceCidrs:
         - 10.250.0.0/16
     nodeSelector: {}
+    allowedNodes:
+      - ichikawap1
+      - uc-k8s3p
+      - uc-k8sv1
     podDisruptionBudget:
       enabled: true
-      minAvailable: 3
+      minAvailable: 1
 
 redis:
   enabled: true

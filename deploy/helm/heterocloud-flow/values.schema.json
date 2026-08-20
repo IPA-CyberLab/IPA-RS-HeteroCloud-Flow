@@ -440,6 +440,7 @@
             "heteronetwork",
             "storage",
             "nodeSelector",
+            "allowedNodes",
             "tolerations",
             "podDisruptionBudget",
             "resources"
@@ -552,6 +553,15 @@
               "type": "object",
               "additionalProperties": {"type": "string"}
             },
+            "allowedNodes": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                "maxLength": 63
+              }
+            },
             "tolerations": {
               "type": "array",
               "items": {"type": "object"}
@@ -583,6 +593,7 @@
             "service",
             "vpnAccess",
             "nodeSelector",
+            "allowedNodes",
             "tolerations",
             "podDisruptionBudget",
             "resources"
@@ -647,6 +658,15 @@
             "nodeSelector": {
               "type": "object",
               "additionalProperties": {"type": "string"}
+            },
+            "allowedNodes": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                "maxLength": 63
+              }
             },
             "tolerations": {
               "type": "array",
