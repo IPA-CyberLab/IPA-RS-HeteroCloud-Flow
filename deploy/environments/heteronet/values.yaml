@@ -3,6 +3,9 @@ runtime:
   # matchmaker workloads stay on the Pod network and use forwarded Services.
   hostNetwork: false
 
+image:
+  tag: "f842649"
+
 # Seven control-plane replicas must occupy at least three eligible hosts. A
 # skew of three still allows overflow onto the two large machines, while
 # DoNotSchedule prevents a 4+3 placement that one two-node fault can erase.
