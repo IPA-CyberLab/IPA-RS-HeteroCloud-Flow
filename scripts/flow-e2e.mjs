@@ -141,15 +141,15 @@ async function createRoomWithRetry(headers) {
 
 async function requestWithRetry(path, method, headers, body) {
   let lastError;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 1; attempt <= connectionAttempts; attempt += 1) {
     try {
       return await request(path, method, headers, body);
     } catch (error) {
       lastError = error;
-      if (!error.retryable || attempt === 3) {
+      if (!error.retryable || attempt === connectionAttempts) {
         throw error;
       }
-      await sleep(250 * (attempt + 1));
+      await sleep(Math.min(connectionRetryDelayMs * attempt, 10_000));
     }
   }
   throw lastError;
