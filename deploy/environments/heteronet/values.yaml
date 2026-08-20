@@ -212,11 +212,13 @@ monitoring:
     additionalScrapeNamespaces:
       - argocd
       - envoy-gateway-system
+    retentionTime: 7d
+    retentionSize: 4GB
     storage:
       type: hostPath
       hostPath: /var/lib/heterocloud-flow/prometheus
-    # Every node keeps a complete local TSDB. A failed node loses one copy
-    # without interrupting queries or deleting the other four histories.
+    # Every node keeps a bounded local TSDB. A failed node loses one copy
+    # without interrupting queries or exhausting smaller root filesystems.
     nodeSelector: {}
     podDisruptionBudget:
       enabled: true
