@@ -3,6 +3,13 @@ runtime:
   # matchmaker workloads stay on the Pod network and use forwarded Services.
   hostNetwork: false
 
+# Seven control-plane replicas must occupy at least three eligible hosts. A
+# skew of three still allows overflow onto the two large machines, while
+# DoNotSchedule prevents a 4+3 placement that one two-node fault can erase.
+topologySpread:
+  maxSkew: 3
+  whenUnsatisfiable: DoNotSchedule
+
 # Forwarded workloads are eligible on every Kubernetes node. coturn has its own
 # public-ingress selector because it is the only direct workload.
 nodeSelector: {}
@@ -92,6 +99,13 @@ matchmaker:
 
 signaling:
   replicaCount: 7
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
   publicUrls:
     - wss://flow.heterocloud.mizuame.app
   publicService:
@@ -134,8 +148,11 @@ livekit:
       networking.heteronetwork.io/ingress-replicas: "3"
   resources:
     requests:
-      cpu: "1"
-      memory: 512Mi
+      cpu: 200m
+      memory: 128Mi
+    limits:
+      cpu: "4"
+      memory: 4Gi
 
 coturn:
   replicaCount: 4

@@ -37,7 +37,7 @@ function sleep(milliseconds) {
 
 function retryableConnectionError(error) {
   if (error?.retryable) return true;
-  return /(?:HTTP 50[234]|request failed|signaling socket|WebRTC connection timed out|connection state (?:failed|closed)|selected candidate pair was not reported)/i
+  return /(?:HTTP 50[234]|request failed|(?:authentication|rate_limit|signaling)_unavailable|signaling socket|WebRTC connection timed out|connection state (?:failed|closed)|selected candidate pair was not reported)/i
     .test(String(error?.stack || error));
 }
 

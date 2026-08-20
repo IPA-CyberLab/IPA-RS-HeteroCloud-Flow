@@ -35,7 +35,7 @@ use flow_domain::{
 use flow_rate_limit::{
     IpRateLimiter, RateLimitDecision, RateLimitPolicy, RedisBackend, TrustedProxies,
 };
-use flow_store::{PgStore, database_url_with_proxy};
+use flow_store::{PgStore, StoreError, database_url_with_proxy};
 use futures_util::{SinkExt, StreamExt};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -52,10 +52,47 @@ const REDIS_RECONNECT_BACKOFF: Duration = Duration::from_millis(100);
 const REDIS_RECONNECT_MAX_EXPONENT: usize = 3;
 const REDIS_SUBSCRIBER_BUFFER: usize = 256;
 const REDIS_PUBLISHER_BUFFER: usize = 256;
+const CREDENTIAL_STATUS_ATTEMPTS: usize = 3;
+const CREDENTIAL_STATUS_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 
 fn redis_reconnect_delay(attempt: usize) -> Duration {
     let exponent = attempt.min(REDIS_RECONNECT_MAX_EXPONENT);
     REDIS_RECONNECT_BACKOFF.saturating_mul(1_u32 << exponent)
+}
+
+async fn principal_context_is_revoked_with_retry(
+    store: &PgStore,
+    organization_id: Uuid,
+    project_id: Uuid,
+    service_instance_id: Uuid,
+    context_id: Uuid,
+) -> std::result::Result<bool, StoreError> {
+    for attempt in 0..CREDENTIAL_STATUS_ATTEMPTS {
+        match store
+            .principal_context_is_revoked(
+                organization_id,
+                project_id,
+                service_instance_id,
+                context_id,
+            )
+            .await
+        {
+            Ok(revoked) => return Ok(revoked),
+            Err(error) if attempt + 1 < CREDENTIAL_STATUS_ATTEMPTS => {
+                warn!(
+                    %error,
+                    attempt = attempt + 1,
+                    "credential status lookup failed; retrying"
+                );
+                tokio::time::sleep(
+                    CREDENTIAL_STATUS_RETRY_BACKOFF.saturating_mul((attempt + 1) as u32),
+                )
+                .await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("credential status retry loop always returns")
 }
 
 #[derive(Clone)]
@@ -282,15 +319,14 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, room_id: Uuid, cl
             return;
         }
     };
-    match state
-        .store
-        .principal_context_is_revoked(
-            principal.organization_id,
-            principal.project_id,
-            principal.service_instance_id,
-            principal.token_id,
-        )
-        .await
+    match principal_context_is_revoked_with_retry(
+        &state.store,
+        principal.organization_id,
+        principal.project_id,
+        principal.service_instance_id,
+        principal.token_id,
+    )
+    .await
     {
         Ok(false) => {}
         Ok(true) => {
@@ -632,14 +668,14 @@ async fn relay(
                 break;
             }
             _ = heartbeat.tick() => {
-                match store
-                    .principal_context_is_revoked(
-                        principal.organization_id,
-                        principal.project_id,
-                        principal.service_instance_id,
-                        principal.token_id,
-                    )
-                    .await
+                match principal_context_is_revoked_with_retry(
+                    &store,
+                    principal.organization_id,
+                    principal.project_id,
+                    principal.service_instance_id,
+                    principal.token_id,
+                )
+                .await
                 {
                     Ok(false) => {}
                     Ok(true) => {

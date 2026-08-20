@@ -6,6 +6,10 @@ image:
   pullPolicy: IfNotPresent
   pullSecrets: []
 
+topologySpread:
+  maxSkew: 1
+  whenUnsatisfiable: ScheduleAnyway
+
 serviceAccount:
   create: true
   name: ""
