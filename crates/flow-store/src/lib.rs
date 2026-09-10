@@ -103,7 +103,7 @@ impl PgStore {
             .min_connections(1)
             .acquire_timeout(Duration::from_secs(5))
             .idle_timeout(Duration::from_secs(15))
-            .max_lifetime(Duration::from_secs(60))
+            .max_lifetime(Duration::from_mins(1))
             .connect(database_url)
             .await?;
         Ok(Self { pool })

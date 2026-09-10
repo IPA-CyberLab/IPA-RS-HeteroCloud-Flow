@@ -52,7 +52,7 @@ const REDIS_RECONNECT_BACKOFF: Duration = Duration::from_millis(100);
 const REDIS_RECONNECT_MAX_EXPONENT: usize = 3;
 const REDIS_SUBSCRIBER_BUFFER: usize = 256;
 const REDIS_PUBLISHER_BUFFER: usize = 256;
-const CREDENTIAL_STATUS_ATTEMPTS: usize = 3;
+const CREDENTIAL_STATUS_ATTEMPTS: u32 = 3;
 const CREDENTIAL_STATUS_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 
 fn redis_reconnect_delay(attempt: usize) -> Duration {
@@ -84,10 +84,8 @@ async fn principal_context_is_revoked_with_retry(
                     attempt = attempt + 1,
                     "credential status lookup failed; retrying"
                 );
-                tokio::time::sleep(
-                    CREDENTIAL_STATUS_RETRY_BACKOFF.saturating_mul((attempt + 1) as u32),
-                )
-                .await;
+                tokio::time::sleep(CREDENTIAL_STATUS_RETRY_BACKOFF.saturating_mul(attempt + 1))
+                    .await;
             }
             Err(error) => return Err(error),
         }
