@@ -19,7 +19,18 @@ for component in api matchmaker signaling livekit; do
 done
 
 for component in prometheus grafana; do
-  grep -q '^  replicas: 6$' "$tmp_dir/${component}.yaml"
+  grep -q '^  replicas: 3$' "$tmp_dir/${component}.yaml"
+  grep -q '^  minAvailable: 1$' "$tmp_dir/${component}.yaml"
+  grep -A1 '^        podAntiAffinity:$' "$tmp_dir/${component}.yaml" |
+    grep -q '^          requiredDuringSchedulingIgnoredDuringExecution:$'
+  sed -n '/^        nodeAffinity:$/,/^[^ ]/p' "$tmp_dir/${component}.yaml" >"$tmp_dir/${component}-nodes.yaml"
+  grep -q '^          requiredDuringSchedulingIgnoredDuringExecution:$' "$tmp_dir/${component}-nodes.yaml"
+  grep -q '^                  - key: kubernetes.io/hostname$' "$tmp_dir/${component}-nodes.yaml"
+  grep -q '^                    operator: In$' "$tmp_dir/${component}-nodes.yaml"
+  test "$(grep -c '^                      - ' "$tmp_dir/${component}-nodes.yaml")" -eq 3
+  for node in ichikawap1 uc-k8s3p uc-k8sv1; do
+    grep -q "^                      - ${node}$" "$tmp_dir/${component}-nodes.yaml"
+  done
 done
 
 for component in api matchmaker signaling; do
@@ -47,7 +58,7 @@ test "$(grep -c '^  minAvailable: 4$' "$tmp_dir/pdb.yaml")" -eq 5
 helm template flow "$chart_dir" -f "$environment_values" \
   --namespace heterocloud-flow >"$tmp_dir/all.yaml"
 test "$(grep -c '^  replicas: 7$' "$tmp_dir/all.yaml")" -eq 4
-test "$(grep -c '^  replicas: 6$' "$tmp_dir/all.yaml")" -eq 2
+test "$(grep -c '^  replicas: 3$' "$tmp_dir/all.yaml")" -eq 2
 grep -Eq 'sentinel monitor flowmaster .* 6379 3' "$tmp_dir/all.yaml"
 grep -Fq 'sentinel down-after-milliseconds flowmaster 2000' "$tmp_dir/all.yaml"
 grep -Fq 'sentinel failover-timeout flowmaster 10000' "$tmp_dir/all.yaml"
@@ -69,4 +80,4 @@ helm template flow "$chart_dir" \
 grep -q '^      nodeSelector:$' "$tmp_dir/migration.yaml"
 grep -q 'database.example.com/proxy-ready: "true"' "$tmp_dir/migration.yaml"
 
-printf 'Flow six-node scheduling tests passed\n'
+printf 'Flow scheduling and monitoring isolation tests passed\n'
