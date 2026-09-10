@@ -5,12 +5,15 @@ on:
     types: [published]
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
   group: release-${{ github.event.release.tag_name }}
   cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name }}
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
   verify:
@@ -43,6 +46,17 @@ jobs:
       TEST_REDIS_URL: redis://127.0.0.1:6379
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify release identity and artifact contract
+        run: |
+          node --test scripts/release-artifact-manifest.test.mjs
+          node scripts/release-artifact-manifest.mjs validate
+          node scripts/release-artifact-manifest.mjs guard flow-release-artifact.json
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.96.1
@@ -92,55 +106,64 @@ jobs:
           if-no-files-found: error
 
   image:
+    permissions:
+      contents: write
+      packages: write
     needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify release identity and artifact contract
+        run: |
+          node --test scripts/release-artifact-manifest.test.mjs
+          node scripts/release-artifact-manifest.mjs validate
+          node scripts/release-artifact-manifest.mjs guard flow-release-artifact.json
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/metadata-action@v5
-        id: flow-meta
-        with:
-          images: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow
-          tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=${{ github.event.release.tag_name }}
-            type=raw,value=latest
-            type=sha
+      - name: Release version
+        id: release
+        run: echo "version=$(node scripts/release-artifact-manifest.mjs validate)" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
+        id: flow
         with:
           context: .
           push: true
-          tags: ${{ steps.flow-meta.outputs.tags }}
-          labels: ${{ steps.flow-meta.outputs.labels }}
+          tags: |
+            ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow:${{ steps.release.outputs.version }}
+            ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow:${{ github.sha }}
           cache-from: type=gha,scope=flow
           cache-to: type=gha,mode=max,scope=flow
-      - uses: docker/metadata-action@v5
-        id: livekit-meta
-        with:
-          images: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-livekit
-          tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=${{ github.event.release.tag_name }}
-            type=raw,value=latest
-            type=sha
       - uses: docker/build-push-action@v6
+        id: livekit
         with:
           context: .
           file: Dockerfile.livekit
           push: true
-          tags: ${{ steps.livekit-meta.outputs.tags }}
-          labels: ${{ steps.livekit-meta.outputs.labels }}
+          tags: |
+            ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-livekit:${{ steps.release.outputs.version }}
+            ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-livekit:${{ github.sha }}
           cache-from: type=gha,scope=livekit
           cache-to: type=gha,mode=max,scope=livekit
       - uses: actions/download-artifact@v4
         with:
           name: helm-chart
           path: dist
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.tgz
+      - name: Generate immutable release artifact
+        env:
+          IMAGE_DIGEST: ${{ steps.flow.outputs.digest }}
+          LIVEKIT_DIGEST: ${{ steps.livekit.outputs.digest }}
+        run: node scripts/release-artifact-manifest.mjs generate flow-release-artifact.json
+      - name: Attach release assets without replacement
+        run: |
+          node scripts/release-artifact-manifest.mjs guard flow-release-artifact.json
+          gh release upload "$RELEASE_TAG" flow-release-artifact.json dist/*.tgz --repo "$GITHUB_REPOSITORY"
