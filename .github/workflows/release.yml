@@ -75,6 +75,11 @@ jobs:
         run: sha256sum --strict --check scripts/chart-dependencies.sha256
       - name: Lint chart
         run: helm lint deploy/helm/heterocloud-flow -f deploy/helm/heterocloud-flow/ci/test-values.yaml
+      - name: Check Redis authentication templates
+        run: |
+          python3 -m venv /tmp/flow-chart-tests
+          /tmp/flow-chart-tests/bin/pip install PyYAML==6.0.3
+          /tmp/flow-chart-tests/bin/python scripts/test_redis_auth.py
       - name: Test coturn external IP mappings
         run: bash deploy/helm/heterocloud-flow/scripts/test-coturn-template.sh
       - name: Test fixed Flow traffic policy

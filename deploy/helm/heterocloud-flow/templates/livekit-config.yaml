@@ -1,4 +1,7 @@
 {{- if not .Values.livekit.existingConfigSecret }}
+{{- if or (and .Values.redis.enabled .Values.redis.auth.enabled) (and (not .Values.redis.enabled) (or .Values.externalRedis.passwordSecretKey .Values.externalRedis.sentinelPasswordSecretKey)) }}
+{{- fail "authenticated Redis requires livekit.existingConfigSecret with matching Redis/Sentinel credentials" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -77,6 +77,42 @@ app.kubernetes.io/part-of: heterocloud-flow
 {{- end -}}
 {{- end }}
 
+{{- define "flow.redisAuthEnv" -}}
+{{- if .Values.redis.enabled -}}
+{{- if .Values.redis.auth.enabled -}}
+{{- $secret := required "authenticated bundled Redis requires redis.auth.existingSecret" .Values.redis.auth.existingSecret -}}
+{{- $key := default "redis-password" .Values.redis.auth.existingSecretPasswordKey -}}
+- name: REDIS_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ $secret | quote }}
+      key: {{ $key | quote }}
+{{- if .Values.redis.auth.sentinel }}
+- name: REDIS_SENTINEL_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ $secret | quote }}
+      key: {{ $key | quote }}
+{{- end }}
+{{- end }}
+{{- else }}
+{{- if .Values.externalRedis.passwordSecretKey }}
+- name: REDIS_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "flow.secretName" . }}
+      key: {{ .Values.externalRedis.passwordSecretKey | quote }}
+{{- end }}
+{{- if .Values.externalRedis.sentinelPasswordSecretKey }}
+- name: REDIS_SENTINEL_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "flow.secretName" . }}
+      key: {{ .Values.externalRedis.sentinelPasswordSecretKey | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{- define "flow.databaseProxyHost" -}}
 {{- printf "%s-postgres-proxy.%s.svc.cluster.local" (include "flow.fullname" .) .Release.Namespace -}}
 {{- end }}

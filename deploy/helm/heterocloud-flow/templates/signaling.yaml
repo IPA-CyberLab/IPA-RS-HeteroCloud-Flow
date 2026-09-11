@@ -101,20 +101,7 @@ spec:
             - name: REDIS_URL
               value: {{ required "externalRedis.address is required" .Values.externalRedis.address | quote }}
             {{- end }}
-            {{- if and (not .Values.redis.enabled) .Values.externalRedis.passwordSecretKey }}
-            - name: REDIS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "flow.secretName" . }}
-                  key: {{ .Values.externalRedis.passwordSecretKey }}
-            {{- end }}
-            {{- if and (not .Values.redis.enabled) .Values.externalRedis.sentinelPasswordSecretKey }}
-            - name: REDIS_SENTINEL_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "flow.secretName" . }}
-                  key: {{ .Values.externalRedis.sentinelPasswordSecretKey }}
-            {{- end }}
+            {{- include "flow.redisAuthEnv" . | nindent 12 }}
             - name: RUST_LOG
               value: info
           readinessProbe:

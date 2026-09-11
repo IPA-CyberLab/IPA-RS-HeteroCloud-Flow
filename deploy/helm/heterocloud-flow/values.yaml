@@ -208,6 +208,10 @@ redis:
   architecture: replication
   auth:
     enabled: false
+    # Required when enabled; Flow clients and Redis use this same Secret/key.
+    existingSecret: ""
+    existingSecretPasswordKey: redis-password
+    sentinel: true
   sentinel:
     enabled: true
     masterSet: flowmaster
