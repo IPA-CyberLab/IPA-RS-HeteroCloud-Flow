@@ -49,6 +49,11 @@ rateLimit:
     - 127.0.0.0/8
     - ::1/128
 
+# Namespace-local PEM CA Secret. The database URL must use sslmode=verify-full.
+databaseTls:
+  caSecretName: ""
+  caSecretKey: ca.crt
+
 database:
   externalPort: 5432
   proxy:

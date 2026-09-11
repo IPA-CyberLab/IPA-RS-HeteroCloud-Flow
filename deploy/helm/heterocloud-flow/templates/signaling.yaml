@@ -52,6 +52,7 @@ spec:
               containerPort: 8082
               protocol: TCP
           env:
+            {{- include "flow.databaseTlsEnv" . | nindent 12 }}
             {{- if .Values.runtime.hostNetwork }}
             - name: FLOW_HOST_IP
               valueFrom:
