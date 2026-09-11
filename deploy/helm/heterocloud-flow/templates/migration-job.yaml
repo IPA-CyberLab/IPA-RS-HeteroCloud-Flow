@@ -49,6 +49,16 @@ spec:
               value: "2"
             - name: MIGRATE_ON_START
               value: "true"
+            {{- if or .Values.redis.enabled .Values.externalRedis.sentinelUrls }}
+            - name: REDIS_SENTINEL_URLS
+              value: {{ include "flow.redisSentinelUrls" . | quote }}
+            - name: REDIS_SENTINEL_MASTER
+              value: {{ include "flow.redisSentinelMaster" . | quote }}
+            {{- else }}
+            - name: REDIS_URL
+              value: {{ required "externalRedis.address is required" .Values.externalRedis.address | quote }}
+            {{- end }}
+            {{- include "flow.redisAuthEnv" . | nindent 12 }}
             - name: HETEROCLOUD_PROVIDER_ISSUER
               value: {{ .Values.providerAuth.issuer | quote }}
             - name: HETEROCLOUD_PROVIDER_AUDIENCE

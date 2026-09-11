@@ -29,13 +29,13 @@ def render(values, error=None):
 def clients(documents):
     selected = {}
     for d in documents:
-        if d.get("kind") != "Deployment":
+        if d.get("kind") not in ("Deployment", "Job"):
             continue
         for c in d["spec"]["template"]["spec"]["containers"]:
-            if c["name"] in ("api", "signaling"):
+            if c["name"] in ("api", "signaling", "migrate"):
                 selected[c["name"]] = {e["name"]: e for e in c["env"]}
-    if set(selected) != {"api", "signaling"}:
-        raise AssertionError("Expected both Redis clients")
+    if set(selected) != {"api", "signaling", "migrate"}:
+        raise AssertionError("Expected API, signaling and migration Redis configuration")
     return selected.values()
 
 
@@ -85,6 +85,16 @@ class RedisAuthTests(unittest.TestCase):
         values = self.bundled()
         values["livekit"]["existingConfigSecret"] = ""
         render(values, "authenticated Redis requires livekit.existingConfigSecret")
+
+    def test_external_direct_redis_includes_migration(self):
+        values = {"redis": {"enabled": False}, "externalRedis": {
+            "address": "redis://redis.example.invalid:6379", "sentinelUrls": [],
+            "passwordSecretKey": "redis-password"},
+            "livekit": {"existingConfigSecret": "dev-livekit-config"}}
+        for env in clients(render(values)):
+            self.assertEqual(env["REDIS_URL"]["value"], "redis://redis.example.invalid:6379")
+            self.assertNotIn("REDIS_SENTINEL_URLS", env)
+            self.assertEqual(env["REDIS_PASSWORD"]["valueFrom"]["secretKeyRef"]["key"], "redis-password")
 
 
 if __name__ == "__main__":
