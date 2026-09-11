@@ -1,0 +1,2 @@
+05665707e771f9ed843842d3ebacb992ef1c4089f138b9711446b37db76ad60a  deploy/helm/heterocloud-flow/charts/redis-23.1.1.tgz
+2e26aa25e9bcd9eb4160be1dc1af6682b9f8f6fb03d74d3e29e41da1a774eac3  deploy/helm/heterocloud-flow/charts/postgresql-ha-16.3.2.tgz
