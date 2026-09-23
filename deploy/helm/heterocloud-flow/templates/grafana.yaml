@@ -151,7 +151,7 @@ data:
           "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
           "id": 5,
           "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
-          "targets": [{"editorMode": "code", "expr": "max by (node) (flow:node_cpu_utilization:ratio{node=~\"$node\"})", "legendFormat": "", "range": true, "refId": "A"}],
+          "targets": [{"editorMode": "code", "expr": "max by (node) (flow:node_cpu_utilization:ratio{node=~\"$node\"}) and on (node) (up{job=\"heteronetwork-agents\"} @ end())", "legendFormat": "", "range": true, "refId": "A"}],
           "title": "Node CPU utilization",
           "type": "timeseries"
         },
@@ -161,7 +161,7 @@ data:
           "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
           "id": 6,
           "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
-          "targets": [{"editorMode": "code", "expr": "max by (node) (flow:node_memory_working_set:ratio{node=~\"$node\"})", "legendFormat": "", "range": true, "refId": "A"}],
+          "targets": [{"editorMode": "code", "expr": "max by (node) (flow:node_memory_working_set:ratio{node=~\"$node\"}) and on (node) (up{job=\"heteronetwork-agents\"} @ end())", "legendFormat": "", "range": true, "refId": "A"}],
           "title": "Node memory utilization",
           "type": "timeseries"
         },
@@ -171,7 +171,7 @@ data:
           "gridPos": {"h": 8, "w": 24, "x": 0, "y": 36},
           "id": 13,
           "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
-          "targets": [{"editorMode": "code", "expr": "up{job=\"heteronetwork-agents\",node=~\"$node\"}", "legendFormat": "{{ `{{node}}` }}", "range": true, "refId": "A"}],
+          "targets": [{"editorMode": "code", "expr": "up{job=\"heteronetwork-agents\",node=~\"$node\"} and on (node) (up{job=\"heteronetwork-agents\"} @ end())", "legendFormat": "{{ `{{node}}` }}", "range": true, "refId": "A"}],
           "title": "Node metrics availability",
           "type": "timeseries"
         },
@@ -182,8 +182,8 @@ data:
           "id": 7,
           "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
           "targets": [
-            {"editorMode": "code", "expr": "heteronetwork:node_vpn_receive_bytes_per_second{node=~\"$node\"}", "legendFormat": "RX", "range": true, "refId": "A"},
-            {"editorMode": "code", "expr": "heteronetwork:node_vpn_transmit_bytes_per_second{node=~\"$node\"}", "legendFormat": "TX", "range": true, "refId": "B"}
+            {"editorMode": "code", "expr": "heteronetwork:node_vpn_receive_bytes_per_second{node=~\"$node\"} and on (node) (up{job=\"heteronetwork-agents\"} @ end())", "legendFormat": "RX", "range": true, "refId": "A"},
+            {"editorMode": "code", "expr": "heteronetwork:node_vpn_transmit_bytes_per_second{node=~\"$node\"} and on (node) (up{job=\"heteronetwork-agents\"} @ end())", "legendFormat": "TX", "range": true, "refId": "B"}
           ],
           "title": "HeteroNetwork VPN bandwidth",
           "type": "timeseries"
@@ -195,8 +195,8 @@ data:
           "id": 8,
           "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
           "targets": [
-            {"editorMode": "code", "expr": "sum by (node) (flow:node_network_receive_bytes_per_second{node=~\"$node\"})", "legendFormat": "RX", "range": true, "refId": "A"},
-            {"editorMode": "code", "expr": "sum by (node) (flow:node_network_transmit_bytes_per_second{node=~\"$node\"})", "legendFormat": "TX", "range": true, "refId": "B"}
+            {"editorMode": "code", "expr": "sum by (node) (flow:node_network_receive_bytes_per_second{node=~\"$node\"}) and on (node) (up{job=\"heteronetwork-agents\"} @ end())", "legendFormat": "RX", "range": true, "refId": "A"},
+            {"editorMode": "code", "expr": "sum by (node) (flow:node_network_transmit_bytes_per_second{node=~\"$node\"}) and on (node) (up{job=\"heteronetwork-agents\"} @ end())", "legendFormat": "TX", "range": true, "refId": "B"}
           ],
           "title": "Total node network throughput",
           "type": "timeseries"
@@ -235,7 +235,7 @@ data:
           "gridPos": {"h": 8, "w": 12, "x": 0, "y": 28},
           "id": 11,
           "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
-          "targets": [{"editorMode": "code", "expr": "sum by (state) (ipars_agent_path_state_count{job=\"heteronetwork-agents\",node=~\"$node\"})", "legendFormat": "", "range": true, "refId": "A"}],
+          "targets": [{"editorMode": "code", "expr": "sum by (state) (ipars_agent_path_state_count{job=\"heteronetwork-agents\",node=~\"$node\"} and on (node) (up{job=\"heteronetwork-agents\"} @ end()))", "legendFormat": "", "range": true, "refId": "A"}],
           "title": "VPN path states",
           "type": "timeseries"
         },
@@ -246,8 +246,8 @@ data:
           "id": 12,
           "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
           "targets": [
-            {"editorMode": "code", "expr": "sum(rate(ipars_agent_direct_path_probes_confirmed_total{job=\"heteronetwork-agents\",node=~\"$node\"}[5m]))", "legendFormat": "Confirmed", "range": true, "refId": "A"},
-            {"editorMode": "code", "expr": "sum(rate(ipars_agent_direct_path_probes_timeout_total{job=\"heteronetwork-agents\",node=~\"$node\"}[5m]))", "legendFormat": "Timed out", "range": true, "refId": "B"}
+            {"editorMode": "code", "expr": "sum(rate(ipars_agent_direct_path_probes_confirmed_total{job=\"heteronetwork-agents\",node=~\"$node\"}[5m]) and on (node) (up{job=\"heteronetwork-agents\"} @ end()))", "legendFormat": "Confirmed", "range": true, "refId": "A"},
+            {"editorMode": "code", "expr": "sum(rate(ipars_agent_direct_path_probes_timeout_total{job=\"heteronetwork-agents\",node=~\"$node\"}[5m]) and on (node) (up{job=\"heteronetwork-agents\"} @ end()))", "legendFormat": "Timed out", "range": true, "refId": "B"}
           ],
           "title": "Lazy-connect probe outcomes",
           "type": "timeseries"
@@ -262,15 +262,15 @@ data:
             "allValue": ".*",
             "current": {"text": "All", "value": "$__all"},
             "datasource": {"type": "prometheus", "uid": "prometheus"},
-            "definition": "label_values(up{job=\"heteronetwork-agents\"}, node)",
+            "definition": "query_result(up{job=\"heteronetwork-agents\"})",
             "includeAll": true,
             "label": "Node",
             "multi": true,
             "name": "node",
             "options": [],
-            "query": {"query": "label_values(up{job=\"heteronetwork-agents\"}, node)", "refId": "StandardVariableQuery"},
+            "query": {"query": "query_result(up{job=\"heteronetwork-agents\"})", "refId": "StandardVariableQuery"},
             "refresh": 1,
-            "regex": "",
+            "regex": "/node=\"([^\"]+)\"/",
             "sort": 1,
             "type": "query"
           }

@@ -53,6 +53,14 @@ jq -e '
   ([.panels[].title] | index("Monitoring target availability") == null)
 ' "$work_dir/dashboard.json" >/dev/null
 
+jq -e '
+  .templating.list[0].definition == "query_result(up{job=\"heteronetwork-agents\"})" and
+  .templating.list[0].query.query == "query_result(up{job=\"heteronetwork-agents\"})" and
+  .templating.list[0].regex == "/node=\"([^\"]+)\"/" and
+  ([.panels[].targets[]?.expr | select(contains("node=~\"$node\""))]
+    | all(contains("up{job=\"heteronetwork-agents\"} @ end()")))
+' "$work_dir/dashboard.json" >/dev/null
+
 grep -q 'heteronetwork:node_vpn_receive_bytes_per_second' "$work_dir/dashboard.json"
 grep -q 'flow:node_cpu_utilization:ratio' "$work_dir/dashboard.json"
 grep -q 'max by (node) (flow:node_cpu_utilization:ratio' "$work_dir/dashboard.json"
