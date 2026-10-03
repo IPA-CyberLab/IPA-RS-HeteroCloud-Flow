@@ -4,7 +4,7 @@ runtime:
   hostNetwork: false
 
 image:
-  tag: "f842649"
+  tag: "0.1.21@sha256:d337980c8e70e4c740024624fb124678c69ced3063c34904591334709317595d"
 
 # Seven control-plane replicas must occupy at least three eligible hosts. A
 # skew of three still allows overflow onto the two large machines, while
@@ -139,13 +139,9 @@ livekit:
         - 163.220.236.52/32
         - 163.220.236.53/32
   metrics:
-    urls:
-      - http://10.250.0.2:6789/metrics
-      - http://10.250.0.3:6789/metrics
-      - http://10.250.0.5:6789/metrics
-      - http://10.250.0.6:6789/metrics
-      - http://10.250.0.10:6789/metrics
-      - http://10.250.0.8:6789/metrics
+    # Discover every ready replica; never pin deleted nodes or Pod IPs.
+    discovery: true
+    urls: []
   rtc:
     annotations:
       networking.heteronetwork.io/ingress-replicas: "3"
@@ -191,15 +187,9 @@ coturn:
         publicIp: 163.220.236.61
         privateIp: 10.250.0.10
   metrics:
-    urls:
-      - http://10.250.0.4:9641/metrics
-      - http://10.250.0.5:9641/metrics
-      - http://10.250.0.6:9641/metrics
-      - http://10.250.0.10:9641/metrics
-      - http://10.250.0.4:9642/metrics
-      - http://10.250.0.5:9642/metrics
-      - http://10.250.0.6:9642/metrics
-      - http://10.250.0.10:9642/metrics
+    # Discover every ready replica; never pin deleted nodes or Pod IPs.
+    discovery: true
+    urls: []
   resources:
     requests:
       cpu: 250m
