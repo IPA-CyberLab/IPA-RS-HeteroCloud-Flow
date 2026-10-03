@@ -1,17 +1,20 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
+    net::{SocketAddr, TcpStream, ToSocketAddrs},
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use futures_util::{StreamExt, TryStreamExt, stream};
 use url::{Host, Url};
 use uuid::Uuid;
 
 const MAX_METRICS_BODY_BYTES: u64 = 16 * 1024 * 1024;
 const SCRAPE_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_DISCOVERED_TARGETS: usize = 256;
+const SCRAPE_CONCURRENCY: usize = 16;
 const COTURN_RELEVANT_METRICS: [&str; 3] = [
     "turn_traffic_rcvb",
     "turn_traffic_sentb",
@@ -52,32 +55,42 @@ impl CoturnMetrics {
 #[derive(Clone, Default)]
 pub struct CoturnMetricsClient {
     endpoints: Arc<Vec<MetricsEndpoint>>,
+    discovery_endpoints: Arc<Vec<MetricsEndpoint>>,
 }
 
 impl CoturnMetricsClient {
     pub fn new(urls: Vec<String>) -> Result<Self> {
         Ok(Self {
             endpoints: parse_endpoints(urls, "COTURN_METRICS_URLS")?,
+            discovery_endpoints: Arc::default(),
         })
     }
 
+    pub fn with_discovery(urls: Vec<String>, discovery_urls: Vec<String>) -> Result<Self> {
+        validate_target_modes(&urls, &discovery_urls)?;
+        let mut client = Self::new(urls)?;
+        client.discovery_endpoints =
+            parse_endpoints(discovery_urls, "COTURN_METRICS_DISCOVERY_URLS")?;
+        Ok(client)
+    }
+
     pub async fn scrape(&self, service_instance_id: Uuid) -> Result<Option<CoturnMetrics>> {
-        if self.endpoints.is_empty() {
+        if self.endpoints.is_empty() && self.discovery_endpoints.is_empty() {
             return Ok(None);
         }
-        let mut tasks = tokio::task::JoinSet::new();
-        for endpoint in self.endpoints.iter() {
-            let endpoint = endpoint.clone();
-            tasks.spawn_blocking(move || {
-                let body = endpoint.fetch()?;
-                parse_coturn_prometheus_metrics(&body, service_instance_id)
-            });
-        }
-
+        let endpoints = scrape_targets(&self.endpoints, &self.discovery_endpoints).await?;
+        let mut tasks = stream::iter(endpoints)
+            .map(|endpoint| async move {
+                tokio::task::spawn_blocking(move || {
+                    let body = endpoint.fetch()?;
+                    parse_coturn_prometheus_metrics(&body, service_instance_id)
+                })
+                .await
+                .context("coturn metrics task failed")?
+            })
+            .buffer_unordered(SCRAPE_CONCURRENCY);
         let mut total = CoturnMetrics::default();
-        while let Some(result) = tasks.join_next().await {
-            let metrics =
-                result.map_err(|error| anyhow!("coturn metrics task failed: {error}"))??;
+        while let Some(metrics) = tasks.try_next().await? {
             total = total.checked_add(metrics)?;
         }
         Ok(Some(total))
@@ -108,36 +121,84 @@ impl LiveKitMetrics {
 #[derive(Clone, Default)]
 pub struct LiveKitMetricsClient {
     endpoints: Arc<Vec<MetricsEndpoint>>,
+    discovery_endpoints: Arc<Vec<MetricsEndpoint>>,
 }
 
 impl LiveKitMetricsClient {
     pub fn new(urls: Vec<String>) -> Result<Self> {
         Ok(Self {
             endpoints: parse_endpoints(urls, "LIVEKIT_METRICS_URLS")?,
+            discovery_endpoints: Arc::default(),
         })
     }
 
+    pub fn with_discovery(urls: Vec<String>, discovery_urls: Vec<String>) -> Result<Self> {
+        validate_target_modes(&urls, &discovery_urls)?;
+        let mut client = Self::new(urls)?;
+        client.discovery_endpoints =
+            parse_endpoints(discovery_urls, "LIVEKIT_METRICS_DISCOVERY_URLS")?;
+        Ok(client)
+    }
+
     pub async fn scrape(&self, service_instance_id: Uuid) -> Result<Option<LiveKitMetrics>> {
-        if self.endpoints.is_empty() {
+        if self.endpoints.is_empty() && self.discovery_endpoints.is_empty() {
             return Ok(None);
         }
-        let mut tasks = tokio::task::JoinSet::new();
-        for endpoint in self.endpoints.iter() {
-            let endpoint = endpoint.clone();
-            tasks.spawn_blocking(move || {
-                let body = endpoint.fetch()?;
-                parse_livekit_prometheus_metrics(&body, service_instance_id)
-            });
-        }
-
+        let endpoints = scrape_targets(&self.endpoints, &self.discovery_endpoints).await?;
+        let mut tasks = stream::iter(endpoints)
+            .map(|endpoint| async move {
+                tokio::task::spawn_blocking(move || {
+                    let body = endpoint.fetch()?;
+                    parse_livekit_prometheus_metrics(&body, service_instance_id)
+                })
+                .await
+                .context("LiveKit metrics task failed")?
+            })
+            .buffer_unordered(SCRAPE_CONCURRENCY);
         let mut total = LiveKitMetrics::default();
-        while let Some(result) = tasks.join_next().await {
-            let metrics =
-                result.map_err(|error| anyhow!("LiveKit metrics task failed: {error}"))??;
+        while let Some(metrics) = tasks.try_next().await? {
             total = total.checked_add(metrics)?;
         }
         Ok(Some(total))
     }
+}
+
+fn validate_target_modes(urls: &[String], discovery_urls: &[String]) -> Result<()> {
+    if !urls.is_empty() && !discovery_urls.is_empty() {
+        bail!("static and discovery metrics URLs cannot be combined");
+    }
+    Ok(())
+}
+
+async fn scrape_targets(
+    endpoints: &[MetricsEndpoint],
+    discovery_endpoints: &[MetricsEndpoint],
+) -> Result<Vec<MetricsEndpoint>> {
+    let discovered = stream::iter(discovery_endpoints.to_vec())
+        .map(|endpoint| async move {
+            let addresses = tokio::time::timeout(
+                SCRAPE_TIMEOUT,
+                tokio::net::lookup_host((endpoint.host.as_str(), endpoint.port)),
+            )
+            .await
+            .context("metrics discovery timed out")?
+            .with_context(|| format!("resolve metrics discovery at {}", endpoint.host_header))?;
+            endpoint.discovered_targets(addresses.collect())
+        })
+        .buffer_unordered(SCRAPE_CONCURRENCY)
+        .try_collect::<Vec<_>>()
+        .await?;
+    let mut targets = endpoints.to_vec();
+    let mut seen = BTreeSet::new();
+    for target in discovered.into_iter().flatten() {
+        if seen.insert((target.address, target.path.clone())) {
+            targets.push(target);
+        }
+    }
+    if targets.len() > MAX_DISCOVERED_TARGETS {
+        bail!("metrics discovery exceeded the target limit");
+    }
+    Ok(targets)
 }
 
 fn parse_endpoints(urls: Vec<String>, variable_name: &str) -> Result<Arc<Vec<MetricsEndpoint>>> {
@@ -162,6 +223,7 @@ struct MetricsEndpoint {
     port: u16,
     host_header: String,
     path: String,
+    address: Option<SocketAddr>,
 }
 
 impl MetricsEndpoint {
@@ -201,17 +263,45 @@ impl MetricsEndpoint {
             port,
             host_header,
             path,
+            address: None,
         })
     }
 
+    fn discovered_targets(&self, addresses: Vec<SocketAddr>) -> Result<Vec<Self>> {
+        // A dual-stack headless Service publishes two addresses per Pod. Scrape
+        // one family only, so the same process's counters are not counted twice.
+        let prefer_ipv4 = addresses.iter().any(SocketAddr::is_ipv4);
+        let addresses = addresses
+            .into_iter()
+            .filter(|address| address.is_ipv4() == prefer_ipv4)
+            .collect::<BTreeSet<_>>();
+        if addresses.is_empty() {
+            bail!("metrics discovery returned no ready targets");
+        }
+        if addresses.len() > MAX_DISCOVERED_TARGETS {
+            bail!("metrics discovery exceeded the target limit");
+        }
+        Ok(addresses
+            .into_iter()
+            .map(|address| Self {
+                address: Some(address),
+                ..self.clone()
+            })
+            .collect())
+    }
+
     fn fetch(&self) -> Result<String> {
-        let addresses = (self.host.as_str(), self.port)
-            .to_socket_addrs()
-            .with_context(|| format!("resolve metrics at {}", self.host_header))?;
+        let addresses = match self.address {
+            Some(address) => vec![address],
+            None => (self.host.as_str(), self.port)
+                .to_socket_addrs()
+                .with_context(|| format!("resolve metrics at {}", self.host_header))?
+                .collect(),
+        };
         let deadline = Instant::now() + SCRAPE_TIMEOUT;
         let mut last_error = None;
         let mut stream = None;
-        for address in addresses.take(8) {
+        for address in addresses.into_iter().take(8) {
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                 break;
             };
@@ -659,8 +749,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        CoturnMetricsClient, LiveKitMetricsClient, parse_coturn_prometheus_metrics,
-        parse_http_response, parse_livekit_prometheus_metrics, parse_nonnegative_integer,
+        CoturnMetricsClient, LiveKitMetricsClient, MetricsEndpoint,
+        parse_coturn_prometheus_metrics, parse_http_response, parse_livekit_prometheus_metrics,
+        parse_nonnegative_integer,
     };
 
     #[test]
@@ -815,6 +906,132 @@ livekit_packet_bytes{{direction="outgoing",transmission="initial",country=""}} 4
             ])
             .is_err()
         );
+        server.join().unwrap();
+    }
+
+    fn metrics_server(body: String) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut connection, _) = listener.accept().unwrap();
+            connection
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                connection.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+                assert!(request.len() < 4096);
+            }
+            write!(
+                connection,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        (format!("http://{address}/metrics"), server)
+    }
+
+    #[tokio::test]
+    async fn discovered_replicas_are_all_scraped_and_summed() {
+        let service_id = Uuid::new_v4();
+        let user = format!(
+            "123:{}:{}:{service_id}:{}",
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4()
+        );
+        let (first, first_server) =
+            metrics_server(format!("turn_traffic_rcvb{{user=\"{user}\"}} 42\n"));
+        let (second, second_server) =
+            metrics_server(format!("turn_traffic_rcvb{{user=\"{user}\"}} 21\n"));
+        let addresses = [&first, &second].map(|url| {
+            let url = url::Url::parse(url).unwrap();
+            format!("{}:{}", url.host_str().unwrap(), url.port().unwrap())
+                .parse()
+                .unwrap()
+        });
+        let endpoint = MetricsEndpoint::parse("http://headless.invalid:9641/metrics").unwrap();
+        let targets = endpoint.discovered_targets(addresses.to_vec()).unwrap();
+        let client = CoturnMetricsClient {
+            endpoints: std::sync::Arc::new(targets),
+            ..CoturnMetricsClient::default()
+        };
+        assert_eq!(
+            client
+                .scrape(service_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .ingress_bytes,
+            63
+        );
+        first_server.join().unwrap();
+        second_server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn discovery_resolves_dns_each_scrape_and_rejects_no_targets() {
+        let service_id = Uuid::new_v4();
+        let (url, server) = metrics_server(String::new());
+        let url = url.replace("127.0.0.1", "localhost");
+        let client = CoturnMetricsClient::with_discovery(Vec::new(), vec![url.clone()]).unwrap();
+        assert_eq!(
+            client
+                .scrape(service_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .ingress_bytes,
+            0
+        );
+        server.join().unwrap();
+        assert!(client.scrape(service_id).await.is_err());
+        assert!(CoturnMetricsClient::with_discovery(vec![url.clone()], vec![url]).is_err());
+        let client = LiveKitMetricsClient::with_discovery(
+            Vec::new(),
+            vec!["http://does-not-exist.invalid:6789/metrics".into()],
+        )
+        .unwrap();
+        assert!(client.scrape(service_id).await.is_err());
+    }
+
+    #[test]
+    fn discovery_deduplicates_addresses_and_dual_stack_without_truncating() {
+        let endpoint = MetricsEndpoint::parse("http://headless.invalid:9641/metrics").unwrap();
+        let addresses = [
+            "10.0.0.1:9641",
+            "10.0.0.2:9641",
+            "10.0.0.1:9641",
+            "[::1]:9641",
+        ]
+        .map(|address| address.parse().unwrap())
+        .to_vec();
+        assert_eq!(endpoint.discovered_targets(addresses).unwrap().len(), 2);
+        assert_eq!(
+            endpoint
+                .discovered_targets(vec!["[::1]:9641".parse().unwrap()])
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(endpoint.discovered_targets(Vec::new()).is_err());
+        let addresses = (1..=257)
+            .map(|port| std::net::SocketAddr::from(([127, 0, 0, 1], port)))
+            .collect();
+        assert!(endpoint.discovered_targets(addresses).is_err());
+    }
+
+    #[tokio::test]
+    async fn one_failed_replica_never_returns_a_successful_partial_total() {
+        let (healthy, server) = metrics_server(String::new());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let failed = format!("http://{}/metrics", listener.local_addr().unwrap());
+        drop(listener);
+        let client = CoturnMetricsClient::new(vec![healthy, failed]).unwrap();
+        assert!(client.scrape(Uuid::new_v4()).await.is_err());
         server.join().unwrap();
     }
 }

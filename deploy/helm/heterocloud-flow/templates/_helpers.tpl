@@ -207,3 +207,24 @@ nodeAffinity:
 {{- fail (printf "%s must not set networking.heteronetwork.io/traffic-mode; Flow fixes this policy by component" .path) -}}
 {{- end -}}
 {{- end }}
+{{/* Discovery URLs refer to headless Services; every ready address is scraped. */}}
+{{- define "flow.coturnMetricsDiscoveryUrls" -}}
+{{- $urls := list -}}
+{{- if and .Values.coturn.metrics.discovery (empty .Values.coturn.metrics.urls) -}}
+{{- if gt (int .Values.coturn.replicaCount) 0 -}}
+{{- $urls = append $urls (printf "http://%s-coturn-metrics-discovery:%v/metrics" (include "flow.fullname" .) .Values.coturn.metrics.port) -}}
+{{- end -}}
+{{- range .Values.coturn.additionalPools -}}
+{{- if gt (int .replicaCount) 0 -}}
+{{- $urls = append $urls (printf "http://%s-coturn-%s-metrics-discovery:%v/metrics" (include "flow.fullname" $) .name .metricsPort) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $urls -}}
+{{- end -}}
+
+{{- define "flow.livekitMetricsDiscoveryUrls" -}}
+{{- if and .Values.livekit.metrics.discovery (empty .Values.livekit.metrics.urls) (gt (int .Values.livekit.replicaCount) 0) -}}
+{{- printf "http://%s-livekit-metrics-discovery:%v/metrics" (include "flow.fullname" .) .Values.livekit.metrics.port -}}
+{{- end -}}
+{{- end -}}

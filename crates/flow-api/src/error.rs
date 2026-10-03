@@ -56,6 +56,14 @@ impl ApiError {
         }
     }
 
+    pub fn usage_unavailable() -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            code: "usage_unavailable",
+            message: "usage measurement is temporarily unavailable; retry later".into(),
+        }
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,

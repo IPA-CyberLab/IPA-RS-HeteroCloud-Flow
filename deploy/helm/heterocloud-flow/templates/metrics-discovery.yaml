@@ -1,0 +1,29 @@
+{{- $targets := list (dict "component" "livekit" "suffix" "" "port" .Values.livekit.metrics.port "pool" "") (dict "component" "coturn" "suffix" "" "port" .Values.coturn.metrics.port "pool" "primary") -}}
+{{- range .Values.coturn.additionalPools -}}
+{{- $targets = append $targets (dict "component" "coturn" "suffix" (printf "-%s" .name) "port" .metricsPort "pool" .name) -}}
+{{- end -}}
+{{- range $target := $targets }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flow.fullname" $ }}-{{ $target.component }}{{ $target.suffix }}-metrics-discovery
+  labels:
+    {{- include "flow.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $target.component }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    {{- include "flow.selectorLabels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $target.component }}
+    {{- if $target.pool }}
+    flow.heterocloud.io/turn-pool: {{ $target.pool }}
+    {{- end }}
+  ports:
+    - name: metrics
+      port: {{ $target.port }}
+      targetPort: metrics
+      protocol: TCP
+      appProtocol: http
+{{- end }}

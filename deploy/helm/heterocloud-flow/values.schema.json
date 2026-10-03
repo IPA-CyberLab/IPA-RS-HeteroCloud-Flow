@@ -270,6 +270,7 @@
           "type": "object",
           "required": ["port", "urls"],
           "properties": {
+            "discovery": {"type": "boolean"},
             "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
             "urls": {
               "type": "array",
@@ -419,6 +420,7 @@
           "type": "object",
           "required": ["port", "urls"],
           "properties": {
+            "discovery": {"type": "boolean"},
             "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
             "urls": {
               "type": "array",

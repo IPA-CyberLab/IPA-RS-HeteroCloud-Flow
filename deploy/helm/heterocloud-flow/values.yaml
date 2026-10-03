@@ -140,6 +140,7 @@ livekit:
   existingConfigSecret: ""
   metrics:
     port: 6789
+    discovery: true
     urls: []
   signal:
     servicePort: 7880
@@ -194,6 +195,7 @@ coturn:
     hostNetdevMaxBacklog: 65536
   metrics:
     port: 9641
+    discovery: true
     urls: []
   annotations: {}
   nodeSelector: {}

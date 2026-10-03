@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "flow-api"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "anyhow",
  "axum",
@@ -756,6 +756,7 @@ dependencies = [
  "flow-rate-limit",
  "flow-store",
  "flow-turn",
+ "futures-util",
  "hmac 0.12.1",
  "http",
  "jsonwebtoken 11.0.0",
@@ -775,7 +776,7 @@ dependencies = [
 
 [[package]]
 name = "flow-auth"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -792,7 +793,7 @@ dependencies = [
 
 [[package]]
 name = "flow-domain"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "chrono",
  "serde",
@@ -804,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "flow-livekit"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "chrono",
  "flow-domain",
@@ -816,7 +817,7 @@ dependencies = [
 
 [[package]]
 name = "flow-matchmaker"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "anyhow",
  "axum",
@@ -834,7 +835,7 @@ dependencies = [
 
 [[package]]
 name = "flow-rate-limit"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -849,7 +850,7 @@ dependencies = [
 
 [[package]]
 name = "flow-signaling"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "anyhow",
  "axum",
@@ -876,7 +877,7 @@ dependencies = [
 
 [[package]]
 name = "flow-store"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "chrono",
  "flow-domain",
@@ -890,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "flow-turn"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "base64 0.22.1",
  "chrono",

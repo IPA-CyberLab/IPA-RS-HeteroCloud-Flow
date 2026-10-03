@@ -147,6 +147,10 @@ spec:
               value: {{ join "," .Values.coturn.metrics.urls | quote }}
             - name: LIVEKIT_METRICS_URLS
               value: {{ join "," .Values.livekit.metrics.urls | quote }}
+            - name: COTURN_METRICS_DISCOVERY_URLS
+              value: {{ include "flow.coturnMetricsDiscoveryUrls" . | quote }}
+            - name: LIVEKIT_METRICS_DISCOVERY_URLS
+              value: {{ include "flow.livekitMetricsDiscoveryUrls" . | quote }}
             - name: RUST_LOG
               value: info
           readinessProbe:

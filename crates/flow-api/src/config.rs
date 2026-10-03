@@ -95,11 +95,17 @@ impl Config {
             bail!("LIVEKIT_TOKEN_TTL_SECONDS must be positive and no longer than the auth TTL");
         }
         let coturn_metrics_urls = optional_url_list("COTURN_METRICS_URLS")?;
-        let coturn_metrics = CoturnMetricsClient::new(coturn_metrics_urls)
-            .context("COTURN_METRICS_URLS is invalid")?;
+        let coturn_metrics = CoturnMetricsClient::with_discovery(
+            coturn_metrics_urls,
+            optional_url_list("COTURN_METRICS_DISCOVERY_URLS")?,
+        )
+        .context("COTURN_METRICS_URLS is invalid")?;
         let livekit_metrics_urls = optional_url_list("LIVEKIT_METRICS_URLS")?;
-        let livekit_metrics = LiveKitMetricsClient::new(livekit_metrics_urls)
-            .context("LIVEKIT_METRICS_URLS is invalid")?;
+        let livekit_metrics = LiveKitMetricsClient::with_discovery(
+            livekit_metrics_urls,
+            optional_url_list("LIVEKIT_METRICS_DISCOVERY_URLS")?,
+        )
+        .context("LIVEKIT_METRICS_URLS is invalid")?;
         let redis_backend = RedisBackend::from_env().context("invalid Redis configuration")?;
         let rate_limit_policy =
             RateLimitPolicy::from_env().context("invalid public rate-limit policy")?;

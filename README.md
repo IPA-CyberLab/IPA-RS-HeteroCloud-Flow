@@ -4,6 +4,8 @@ HeteroCloud Flow is the first managed service provider for HeteroCloud. It
 owns realtime session, matchmaking, signaling, and usage state. It does not
 own customer accounts, organizations, projects, billing, or IAM policy.
 
+Usage measurement and failure semantics: [usage metrics](docs/USAGE_METRICS.md).
+
 ## Components
 
 | Component | Responsibility |

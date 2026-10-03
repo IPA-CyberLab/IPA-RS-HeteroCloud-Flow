@@ -16,6 +16,7 @@ flow-livekit.workspace = true
 flow-rate-limit.workspace = true
 flow-store.workspace = true
 flow-turn.workspace = true
+futures-util.workspace = true
 http.workspace = true
 serde.workspace = true
 serde_json.workspace = true

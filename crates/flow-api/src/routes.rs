@@ -272,7 +272,7 @@ fn insert_rate_limit_headers(response: &mut Response, decision: RateLimitDecisio
                 ("X-RateLimit-Reset" = u64, description = "Seconds until the bucket is full")
             )
         ),
-        (status = 503, description = "Request admission backend is unavailable", body = ErrorEnvelope)
+        (status = 503, description = "Request admission or usage measurement is unavailable", body = ErrorEnvelope)
     )
 )]
 async fn service_overview(
@@ -327,8 +327,9 @@ async fn service_overview(
             warn!(
                 %error,
                 service_instance_id = %context.principal.service_instance_id,
-                "coturn metrics scrape failed; returning database usage only"
+                "coturn metrics scrape failed; usage unavailable"
             );
+            return Err(ApiError::usage_unavailable());
         }
     }
     match livekit_metrics_result {
@@ -349,8 +350,9 @@ async fn service_overview(
             warn!(
                 %error,
                 service_instance_id = %context.principal.service_instance_id,
-                "LiveKit metrics scrape failed; returning other usage measurements"
+                "LiveKit metrics scrape failed; usage unavailable"
             );
+            return Err(ApiError::usage_unavailable());
         }
     }
     let transferred_bytes = ingress_bytes
@@ -1696,6 +1698,47 @@ MC4CAQAwBQYDK2VwBCIEIFTAxDs5JPZKnyxcfE0FA8mmr+9KN0LmQ1co4bxZ6Vq/
             "flow-a.example.test"
         );
         assert_eq!(document["x-flow-signaling-protocol"], SIGNALING_PROTOCOL_ID);
+    }
+
+    #[tokio::test]
+    async fn service_overview_reports_scrape_failures_as_unavailable() {
+        use axum::{extract::State, response::IntoResponse};
+        for coturn in [true, false] {
+            let Some(mut state) = test_state().await else {
+                return;
+            };
+            let scope = provision_service(&state, "metrics-failure").await;
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/metrics", listener.local_addr().unwrap());
+            drop(listener);
+            if coturn {
+                state.coturn_metrics = CoturnMetricsClient::new(vec![url]).unwrap();
+            } else {
+                state.livekit_metrics = LiveKitMetricsClient::new(vec![url]).unwrap();
+            }
+            let now = chrono::Utc::now();
+            let context = RequestContext {
+                principal: PrincipalContext {
+                    organization_id: scope.organization_id,
+                    project_id: scope.project_id,
+                    service_instance_id: scope.service_instance_id,
+                    principal_id: scope.principal_id,
+                    permissions: BTreeSet::from(["flow.metrics.read".into()]),
+                    issued_at: now,
+                    expires_at: now + chrono::Duration::minutes(5),
+                    token_id: Uuid::new_v4(),
+                },
+                request_id: Uuid::new_v4().to_string(),
+            };
+            let response = super::service_overview(State(state), context)
+                .await
+                .into_response();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let body = response_json(response).await;
+            assert_eq!(body["error"]["code"], "usage_unavailable");
+            assert!(body.get("measured_at").is_none());
+            assert!(body.get("transferred_bytes").is_none());
+        }
     }
 
     #[test]
