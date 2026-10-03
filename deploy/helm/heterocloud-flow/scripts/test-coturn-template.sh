@@ -230,6 +230,21 @@ helm template flow "${chart_dir}" \
 assert_contains 'turn:turn-a.example.test:3479?transport=udp' "${tmp_dir}/api-pools.yaml"
 assert_contains 'turn:turn-a.example.test:3479?transport=tcp' "${tmp_dir}/api-pools.yaml"
 
+# The API scrapes every pool; one unreachable metrics endpoint makes the whole
+# scrape unavailable. Both pod and external/host-network egress must allow each
+# configured metrics port, without opening arbitrary ports.
+helm template flow "${chart_dir}" -f "${test_values}" \
+  --show-only templates/networkpolicy.yaml \
+  --set-json 'networkPolicy.externalEgressCidrs=["192.0.2.0/24","2001:db8::/32"]' \
+  --set-json 'coturn.additionalPools=[{"name":"secondary","replicaCount":3,"servicePort":3479,"relayPortMin":50000,"relayPortMax":50100,"metricsPort":9642}]' \
+  >"${tmp_dir}/networkpolicy-pools.yaml"
+test "$(grep -c 'port: 9641$' "${tmp_dir}/networkpolicy-pools.yaml")" -eq 3
+test "$(grep -c 'port: 9642$' "${tmp_dir}/networkpolicy-pools.yaml")" -eq 3
+assert_not_contains 'port: 3479' "${tmp_dir}/networkpolicy-pools.yaml"
+helm template flow "${chart_dir}" -f "${test_values}" \
+  --show-only templates/networkpolicy.yaml >"${tmp_dir}/networkpolicy-default.yaml"
+assert_not_contains 'port: 9642' "${tmp_dir}/networkpolicy-default.yaml"
+
 if render \
   --set-json 'coturn.additionalPools=[{"name":"secondary","replicaCount":3,"servicePort":3478,"relayPortMin":50000,"relayPortMax":50100,"metricsPort":9642}]' \
   >"${tmp_dir}/unexpected-duplicate-port.yaml" 2>"${tmp_dir}/duplicate-port-error.log"; then

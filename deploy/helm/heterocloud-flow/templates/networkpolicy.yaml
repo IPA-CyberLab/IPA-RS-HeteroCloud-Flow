@@ -71,6 +71,10 @@ spec:
           protocol: TCP
         - port: {{ $.Values.coturn.metrics.port }}
           protocol: TCP
+        {{- range $.Values.coturn.additionalPools }}
+        - port: {{ .metricsPort }}
+          protocol: TCP
+        {{- end }}
     {{- if $.Values.database.proxy.enabled }}
     {{- range $.Values.database.proxy.addresses }}
     - to:
@@ -96,6 +100,10 @@ spec:
           protocol: TCP
         - port: {{ $.Values.coturn.metrics.port }}
           protocol: TCP
+        {{- range $.Values.coturn.additionalPools }}
+        - port: {{ .metricsPort }}
+          protocol: TCP
+        {{- end }}
     {{- end }}
 ---
 # hostNetwork enforcement depends on the cluster CNI. These rules still apply
