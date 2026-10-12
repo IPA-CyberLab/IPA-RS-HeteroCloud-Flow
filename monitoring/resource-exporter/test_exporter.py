@@ -100,6 +100,12 @@ class ResourceTests(unittest.TestCase):
         s.success = True; s.updated -= e.MAX_AGE + 1
         self.assertNotIn('old', s.read()[0])
 
+    def test_control_characters_do_not_break_prometheus_labels(self):
+        value = e.label_value('Alice\tteam\rtest')
+        self.assertEqual(value, '"Alice team test"')
+        self.assertNotIn('\\t', value)
+        self.assertEqual(e.label_value('a\nb'), '"a\\nb"')
+
     def test_quantity(self):
         self.assertEqual(e.quantity('500m'), .5)
         self.assertEqual(e.quantity('8Gi'), 8 * 2**30)

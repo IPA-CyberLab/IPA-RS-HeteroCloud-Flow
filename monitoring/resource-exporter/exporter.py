@@ -58,6 +58,13 @@ def owners(rows):
     return {row['service_id']: resolve(row, set()) for row in rows}
 
 
+def label_value(value):
+    # Prometheus text format supports only backslash, quote and newline escapes.
+    # Other control characters are normalized instead of emitting JSON \t / \r.
+    value = ''.join(c if ord(c) >= 32 and ord(c) != 127 or c == '\n' else ' ' for c in str(value))
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n') + '"'
+
+
 class Metrics:
     def __init__(self):
         self.lines = []
@@ -65,9 +72,9 @@ class Metrics:
 
     def add(self, name, labels, value):
         if name not in self.names:
-            self.lines += [f'# TYPE {name} gauge']
+            self.lines += [f'# HELP {name} Current {name.removeprefix("heterocloud_").replace("_", " ")}.', f'# TYPE {name} gauge']
             self.names.add(name)
-        escaped = ','.join(f'{key}={json.dumps(str(val), ensure_ascii=False)}' for key, val in sorted(labels.items()))
+        escaped = ','.join(f'{key}={label_value(val)}' for key, val in sorted(labels.items()))
         self.lines.append(f'{name}{{{escaped}}} {float(value):.12g}')
 
     def render(self):
@@ -230,7 +237,7 @@ class Snapshot:
     def read(self):
         with self.lock:
             fresh = self.success and time.time() - self.updated <= MAX_AGE
-            return ('# TYPE heterocloud_resource_exporter_success gauge\nheterocloud_resource_exporter_success ' + str(int(fresh)) + '\n' + (self.body if fresh else '')), fresh
+            return ('# HELP heterocloud_resource_exporter_success Whether the latest complete inventory snapshot is fresh.\n# TYPE heterocloud_resource_exporter_success gauge\nheterocloud_resource_exporter_success ' + str(int(fresh)) + '\n' + (self.body if fresh else '')), fresh
 
 
 def main():
