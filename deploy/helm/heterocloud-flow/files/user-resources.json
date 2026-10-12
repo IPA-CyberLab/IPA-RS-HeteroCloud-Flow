@@ -7,7 +7,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 41,
-  "version": 1,
+  "version": 2,
   "editable": false,
   "refresh": "30s",
   "time": {
@@ -235,7 +235,7 @@
         "x": 0,
         "y": 4,
         "w": 24,
-        "h": 3
+        "h": 4
       },
       "description": "",
       "datasource": {
@@ -269,7 +269,7 @@
       "type": "piechart",
       "gridPos": {
         "x": 0,
-        "y": 7,
+        "y": 8,
         "w": 12,
         "h": 9
       },
@@ -341,7 +341,7 @@
       "type": "piechart",
       "gridPos": {
         "x": 12,
-        "y": 7,
+        "y": 8,
         "w": 12,
         "h": 9
       },
@@ -413,7 +413,7 @@
       "type": "piechart",
       "gridPos": {
         "x": 0,
-        "y": 16,
+        "y": 17,
         "w": 12,
         "h": 9
       },
@@ -485,7 +485,7 @@
       "type": "bargauge",
       "gridPos": {
         "x": 12,
-        "y": 16,
+        "y": 17,
         "w": 12,
         "h": 9
       },
@@ -543,7 +543,7 @@
       "type": "table",
       "gridPos": {
         "x": 0,
-        "y": 25,
+        "y": 26,
         "w": 24,
         "h": 10
       },

@@ -7,7 +7,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 41,
-  "version": 1,
+  "version": 2,
   "editable": false,
   "refresh": "30s",
   "time": {
@@ -39,7 +39,7 @@
       "gridPos": {
         "x": 0,
         "y": 0,
-        "w": 4,
+        "w": 8,
         "h": 4
       },
       "description": "",
@@ -95,10 +95,10 @@
       "title": "CPU 使用量（コア）",
       "type": "stat",
       "gridPos": {
-        "x": 4,
-        "y": 0,
-        "w": 4,
-        "h": 4
+        "x": 0,
+        "y": 4,
+        "w": 8,
+        "h": 3
       },
       "description": "",
       "datasource": {
@@ -155,7 +155,7 @@
       "gridPos": {
         "x": 8,
         "y": 0,
-        "w": 4,
+        "w": 8,
         "h": 4
       },
       "description": "",
@@ -211,10 +211,10 @@
       "title": "メモリ使用量",
       "type": "stat",
       "gridPos": {
-        "x": 12,
-        "y": 0,
-        "w": 4,
-        "h": 4
+        "x": 8,
+        "y": 4,
+        "w": 8,
+        "h": 3
       },
       "description": "",
       "datasource": {
@@ -271,7 +271,7 @@
       "gridPos": {
         "x": 16,
         "y": 0,
-        "w": 4,
+        "w": 8,
         "h": 4
       },
       "description": "",
@@ -327,10 +327,10 @@
       "title": "ディスク使用量（ノードFS）",
       "type": "stat",
       "gridPos": {
-        "x": 20,
-        "y": 0,
-        "w": 4,
-        "h": 4
+        "x": 16,
+        "y": 4,
+        "w": 8,
+        "h": 3
       },
       "description": "",
       "datasource": {
@@ -386,9 +386,9 @@
       "type": "text",
       "gridPos": {
         "x": 0,
-        "y": 4,
+        "y": 7,
         "w": 24,
-        "h": 3
+        "h": 5
       },
       "description": "",
       "datasource": {
@@ -422,7 +422,7 @@
       "type": "piechart",
       "gridPos": {
         "x": 0,
-        "y": 7,
+        "y": 12,
         "w": 12,
         "h": 9
       },
@@ -494,7 +494,7 @@
       "type": "piechart",
       "gridPos": {
         "x": 12,
-        "y": 7,
+        "y": 12,
         "w": 12,
         "h": 9
       },
@@ -573,7 +573,7 @@
       "type": "piechart",
       "gridPos": {
         "x": 0,
-        "y": 16,
+        "y": 21,
         "w": 12,
         "h": 9
       },
@@ -645,7 +645,7 @@
       "type": "piechart",
       "gridPos": {
         "x": 12,
-        "y": 16,
+        "y": 21,
         "w": 12,
         "h": 9
       },
@@ -724,7 +724,7 @@
       "type": "piechart",
       "gridPos": {
         "x": 0,
-        "y": 25,
+        "y": 30,
         "w": 12,
         "h": 9
       },
@@ -796,7 +796,7 @@
       "type": "piechart",
       "gridPos": {
         "x": 12,
-        "y": 25,
+        "y": 30,
         "w": 12,
         "h": 9
       },
@@ -875,7 +875,7 @@
       "type": "stat",
       "gridPos": {
         "x": 0,
-        "y": 34,
+        "y": 39,
         "w": 8,
         "h": 4
       },
@@ -933,7 +933,7 @@
       "type": "stat",
       "gridPos": {
         "x": 8,
-        "y": 34,
+        "y": 39,
         "w": 8,
         "h": 4
       },
@@ -991,7 +991,7 @@
       "type": "stat",
       "gridPos": {
         "x": 16,
-        "y": 34,
+        "y": 39,
         "w": 8,
         "h": 4
       },
@@ -1049,9 +1049,9 @@
       "type": "text",
       "gridPos": {
         "x": 0,
-        "y": 38,
+        "y": 43,
         "w": 24,
-        "h": 3
+        "h": 4
       },
       "description": "",
       "datasource": {

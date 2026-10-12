@@ -1,6 +1,6 @@
 # Cluster and user resource usage
 
-The provisioned Grafana home is **HeteroCloud / クラスターリソース** (`/d/heterocloud-cluster-resources/overview`). Each resource has two donut charts: capacity by Kubernetes node, and actual Flash consumption by HeteroCloud user. Hover a slice for its name, value and percentage. Click a user slice or its value to open `/d/heterocloud-user-resources/usage?var-user=<user-id>` and inspect the user's individual services. The existing Flow/VPN dashboard remains linked at the top.
+The provisioned Grafana home is **HeteroCloud / クラスターリソース** (`/d/heterocloud-cluster-resources/overview`). Each resource has two donut charts: capacity by Kubernetes node, and actual Flash consumption by HeteroCloud user. Hover a slice for its name, value and percentage. Click a user slice to open `/d/heterocloud-user-resources/usage?var-user=<user-id>` and inspect the user's individual services. The existing Flow/VPN dashboard remains linked at the top.
 
 ## Meaning of the measurements
 
@@ -29,3 +29,16 @@ bash deploy/helm/heterocloud-flow/scripts/test-prometheus-template.sh  # Docker 
 ```
 
 The Resource monitoring workflow runs these checks and publishes an exporter image. Production pins its digest. Unit coverage includes actual usage versus limits, shared-volume deduplication, missing/stopped services, deleted nodes, old Pod UIDs, task-role ownership, cross-organization isolation, cyclic roles, and stale collection failures.
+
+Read-only browser verification against a deployed Grafana (connect the VPN first):
+
+```sh
+npm ci --prefix monitoring/browser
+npx --prefix monitoring/browser playwright install chromium
+GRAFANA_BASE_URL=http://grafana.heteronetwork.internal:13000 \
+  npm test --prefix monitoring/browser
+```
+
+This test uses actual mouse hover and clicks on all three resource donuts, checks that the drilled-down table contains exactly the selected user's services, tests every user's filtered route, and verifies the Grafana default home. Screenshots and a JSON result are written under `test-results/resource-monitoring`. `ARTIFACT_DIR` can override this directory. It creates, restarts and deletes no services.
+
+With host-network Prometheus and Flannel, remote Pod traffic originates from each monitoring host's `flannel.1` address. `metricsSourceCidrs` permits those host addresses as `/32`, in addition to VPN addresses; it does not grant all tenant Pod CIDRs access. When replacing a monitoring host, update this allowlist along with the monitoring pool. The collector's database connection uses the health-discovered `postgres-ha-connector` Service, not a static list of retired database hosts.

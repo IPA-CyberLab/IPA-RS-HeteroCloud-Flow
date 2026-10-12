@@ -1,0 +1,6 @@
+{
+  "name": "heterocloud-resource-monitoring-e2e",
+  "private": true,
+  "scripts": {"test": "node resource-usage.e2e.cjs"},
+  "devDependencies": {"@playwright/test": "1.62.1"}
+}
