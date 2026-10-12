@@ -72,6 +72,8 @@ spec:
       app.kubernetes.io/component: resources
   template:
     metadata:
+      annotations:
+        checksum/config: {{ toJson $cfg | sha256sum }}
       labels:
         {{- include "flow.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: resources
@@ -199,8 +201,10 @@ spec:
         - ipBlock:
             cidr: {{ . | quote }}
       ports:
-        - port: 55432
+        {{- range $cfg.databasePorts }}
+        - port: {{ . }}
           protocol: TCP
+        {{- end }}
     {{- end }}
 {{- end }}
 {{- end }}

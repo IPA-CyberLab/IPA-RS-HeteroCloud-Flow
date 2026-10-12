@@ -257,6 +257,7 @@ monitoring:
     existingSecret: heterocloud-resource-monitoring
     metricsSourceCidrs: []
     databaseCidrs: []
+    databasePorts: [25432, 25433]
     nodeSelector: {}
     resources:
       requests:

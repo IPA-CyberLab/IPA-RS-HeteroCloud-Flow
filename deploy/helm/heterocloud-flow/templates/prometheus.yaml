@@ -396,7 +396,7 @@ spec:
         {{- include "flow.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: prometheus
       annotations:
-        checksum/resource-exporter: {{ toJson .Values.monitoring.resourceExporter | sha256sum }}
+        checksum/resource-exporter: {{ toString .Values.monitoring.resourceExporter.enabled | sha256sum }}
         checksum/config: {{ printf "%s-%s" (toJson $prometheus) .Chart.Version | sha256sum }}
     spec:
       {{- if $prometheus.vpnAccess.enabled }}
