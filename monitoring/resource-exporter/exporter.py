@@ -81,6 +81,23 @@ class Metrics:
         return '\n'.join(self.lines) + '\n'
 
 
+def workload_pool_node(node):
+    """Configured Flash pool, not a transient Ready/cordon availability signal.
+
+    A control-plane role alone is not a reason to exclude a mixed-role worker.
+    Dedicated control-plane taints do exclude it, even if a stale ready label
+    remains. Runtime readiness labels are maintained by HeteroNetwork setup.
+    """
+    labels = node['metadata'].get('labels', {})
+    runtime_ready = (labels.get('flash.heterocloud.io/gvisor-ready') == 'true' or
+                     (labels.get('flash.heterocloud.io/gpu-ready') == 'true' and
+                      labels.get('nvidia.com/gpu.present') == 'true'))
+    dedicated = {'heteronetwork.io/control-plane-only',
+                 'node-role.kubernetes.io/control-plane', 'node-role.kubernetes.io/master'}
+    return runtime_ready and not any(t.get('key') in dedicated and t.get('effect') in ('NoSchedule', 'NoExecute')
+                                     for t in node.get('spec', {}).get('taints', []))
+
+
 def aggregate(rows, nodes, pods, claims, summaries, now=None):
     """Build a fresh snapshot: deleted objects and failed measurements disappear."""
     now = time.time() if now is None else now
@@ -91,6 +108,7 @@ def aggregate(rows, nodes, pods, claims, summaries, now=None):
     observed_pods, volumes = {}, {}
     for node in nodes:
         name = node['metadata']['name']
+        metrics.add('heterocloud_node_workload_pool', {'node': name}, workload_pool_node(node))
         capacity = node['status']['capacity']
         metrics.add('heterocloud_node_cpu_capacity_cores', {'node': name}, quantity(capacity['cpu']))
         metrics.add('heterocloud_node_memory_capacity_bytes', {'node': name}, quantity(capacity['memory']))

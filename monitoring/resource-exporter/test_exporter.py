@@ -106,6 +106,27 @@ class ResourceTests(unittest.TestCase):
         self.assertNotIn('\\t', value)
         self.assertEqual(e.label_value('a\nb'), '"a\\nb"')
 
+    def test_dedicated_masters_not_in_workload_pool(self):
+        node = {'metadata': {'labels': {'flash.heterocloud.io/gvisor-ready': 'true'}},
+                'spec': {'taints': [{'key': 'heteronetwork.io/control-plane-only', 'effect': 'NoSchedule'}]}}
+        self.assertFalse(e.workload_pool_node(node))
+        node['spec']['taints'][0]['key'] = 'node-role.kubernetes.io/control-plane'
+        self.assertFalse(e.workload_pool_node(node))
+
+    def test_mixed_role_runtime_ready_worker_is_included(self):
+        node = {'metadata': {'labels': {'flash.heterocloud.io/gvisor-ready': 'true',
+                                        'node-role.kubernetes.io/control-plane': ''}}}
+        self.assertTrue(e.workload_pool_node(node))
+        node['metadata']['labels'].pop('flash.heterocloud.io/gvisor-ready')
+        self.assertFalse(e.workload_pool_node(node))
+        node['metadata']['labels'].update({'flash.heterocloud.io/gpu-ready': 'true', 'nvidia.com/gpu.present': 'true'})
+        self.assertTrue(e.workload_pool_node(node))
+
+    def test_transient_maintenance_does_not_change_capacity_denominator(self):
+        node = {'metadata': {'labels': {'flash.heterocloud.io/gvisor-ready': 'true'}},
+                'spec': {'unschedulable': True, 'taints': [{'key': 'node.kubernetes.io/not-ready', 'effect': 'NoSchedule'}]}}
+        self.assertTrue(e.workload_pool_node(node))
+
     def test_quantity(self):
         self.assertEqual(e.quantity('500m'), .5)
         self.assertEqual(e.quantity('8Gi'), 8 * 2**30)
