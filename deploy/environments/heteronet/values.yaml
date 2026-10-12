@@ -209,6 +209,11 @@ monitoring:
       monitoring.heteronetwork.io/ha: "true"
     metricsSourceCidrs:
       - 10.250.0.0/24
+      # hostNetwork Prometheus reaches remote Pods with its flannel.1 source,
+      # not its VPN address. Permit only the three monitoring hosts' gateways.
+      - 10.244.4.0/32  # uc-k8sp5
+      - 10.244.5.0/32  # uc-k8sp4
+      - 10.244.6.0/32  # ichikawap1
     databaseCidrs:
       - 10.250.0.0/24
   prometheus:
