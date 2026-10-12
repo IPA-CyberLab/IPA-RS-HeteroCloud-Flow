@@ -249,6 +249,22 @@ externalRedis:
   sentinelPasswordSecretKey: ""
 
 monitoring:
+  resourceExporter:
+    enabled: false
+    replicaCount: 2
+    image: ""
+    workloadNamespace: heterocloud-flash-workloads
+    existingSecret: heterocloud-resource-monitoring
+    metricsSourceCidrs: []
+    databaseCidrs: []
+    nodeSelector: {}
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
   prometheus:
     enabled: false
     replicaCount: 1

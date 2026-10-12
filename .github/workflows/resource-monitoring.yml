@@ -4,10 +4,14 @@ on:
     branches: [master]
     paths:
       - 'monitoring/**'
+      - 'deploy/helm/heterocloud-flow/**'
+      - 'deploy/environments/heteronet/values.yaml'
       - '.github/workflows/resource-monitoring.yml'
   pull_request:
     paths:
       - 'monitoring/**'
+      - 'deploy/helm/heterocloud-flow/**'
+      - 'deploy/environments/heteronet/values.yaml'
       - '.github/workflows/resource-monitoring.yml'
   workflow_dispatch:
 permissions:
@@ -22,6 +26,14 @@ jobs:
           python-version: '3.13'
       - run: python -m unittest discover -s monitoring/resource-exporter -v
       - run: pip install --require-hashes -r monitoring/resource-exporter/requirements.txt
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+      - run: pip install PyYAML==6.0.3
+      - run: python -m unittest discover -s monitoring -v
+      - run: bash deploy/helm/heterocloud-flow/scripts/test-grafana-template.sh
+      - run: bash deploy/helm/heterocloud-flow/scripts/test-prometheus-template.sh
+
   image:
     if: github.event_name != 'pull_request'
     needs: verify

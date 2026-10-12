@@ -441,6 +441,52 @@
       "additionalProperties": false,
       "required": ["prometheus", "grafana"],
       "properties": {
+      "resourceExporter": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "replicaCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          },
+          "image": {
+            "type": "string"
+          },
+          "workloadNamespace": {
+            "type": "string",
+            "minLength": 1
+          },
+          "existingSecret": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nodeSelector": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "resources": {
+            "type": "object"
+          },
+          "metricsSourceCidrs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "databaseCidrs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
         "prometheus": {
           "type": "object",
           "additionalProperties": false,

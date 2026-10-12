@@ -97,6 +97,26 @@ data:
     rule_files:
       - /etc/prometheus/rules.yml
     scrape_configs:
+      {{- if .Values.monitoring.resourceExporter.enabled }}
+      - job_name: heterocloud-resources
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [{{ .Release.Namespace | quote }}]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]
+            action: keep
+            regex: {{ .Release.Name | quote }}
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            action: keep
+            regex: resources
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            action: keep
+            regex: metrics
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: collector
+        scrape_timeout: 5s
+      {{- end }}
       - job_name: prometheus
         kubernetes_sd_configs:
           - role: pod
@@ -376,6 +396,7 @@ spec:
         {{- include "flow.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: prometheus
       annotations:
+        checksum/resource-exporter: {{ toJson .Values.monitoring.resourceExporter | sha256sum }}
         checksum/config: {{ printf "%s-%s" (toJson $prometheus) .Chart.Version | sha256sum }}
     spec:
       {{- if $prometheus.vpnAccess.enabled }}

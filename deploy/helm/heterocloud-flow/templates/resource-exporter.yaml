@@ -1,0 +1,206 @@
+{{- if .Values.monitoring.resourceExporter.enabled }}
+{{- $cfg := .Values.monitoring.resourceExporter }}
+{{- $name := printf "%s-resources" (include "flow.fullname" .) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-{{ .Release.Namespace }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [nodes/proxy]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-{{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}-{{ .Release.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $cfg.workloadNamespace }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, persistentvolumeclaims]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $cfg.workloadNamespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: resources
+spec:
+  replicas: {{ $cfg.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: resources
+  template:
+    metadata:
+      labels:
+        {{- include "flow.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: resources
+    spec:
+      serviceAccountName: {{ $name }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with $cfg.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "flow.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: resources
+      containers:
+        - name: resources
+          image: {{ required "resourceExporter.image is required" $cfg.image | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: metrics
+              containerPort: 9790
+          env:
+            - name: WORKLOAD_NAMESPACE
+              value: {{ $cfg.workloadNamespace | quote }}
+            - name: COLLECTION_INTERVAL
+              value: "30"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $cfg.existingSecret }}
+                  key: database-url
+          resources:
+            {{- toYaml $cfg.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 20
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            failureThreshold: 30
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: resources
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "flow.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: resources
+  ports:
+    - name: metrics
+      port: 9790
+      targetPort: metrics
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: resources
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: prometheus
+        {{- range $cfg.metricsSourceCidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: 9790
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # The API service is DNATed to a host endpoint by the CNI.
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+    {{- range $cfg.databaseCidrs }}
+    - to:
+        - ipBlock:
+            cidr: {{ . | quote }}
+      ports:
+        - port: 55432
+          protocol: TCP
+    {{- end }}
+{{- end }}
+{{- end }}

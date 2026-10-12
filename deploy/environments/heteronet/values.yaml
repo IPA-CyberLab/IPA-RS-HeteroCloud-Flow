@@ -202,6 +202,15 @@ coturn:
     networking.heteronetwork.io/public-ingress: "true"
 
 monitoring:
+  resourceExporter:
+    enabled: true
+    image: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-resource-exporter:1ec128b3da0ba303b16bb4bc2b88aa72034ab233@sha256:9a6ee1b2971dc684437f419b742d77645fe04d2d68c5dabaa0002719678e8a6d
+    nodeSelector:
+      monitoring.heteronetwork.io/ha: "true"
+    metricsSourceCidrs:
+      - 10.250.0.0/24
+    databaseCidrs:
+      - 10.250.0.0/24
   prometheus:
     enabled: true
     replicaCount: 3

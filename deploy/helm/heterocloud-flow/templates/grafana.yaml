@@ -285,6 +285,18 @@ data:
       "weekStart": ""
     }
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $grafanaName }}-resources
+  labels:
+    {{- include "flow.labels" . | nindent 4 }}
+data:
+  cluster-resources.json: |
+{{ .Files.Get "files/cluster-resources.json" | indent 4 }}
+  user-resources.json: |
+{{ .Files.Get "files/user-resources.json" | indent 4 }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -309,6 +321,7 @@ spec:
         {{- include "flow.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: grafana
       annotations:
+        checksum/resource-dashboards: {{ printf "%s%s" (.Files.Get "files/cluster-resources.json") (.Files.Get "files/user-resources.json") | sha256sum }}
         checksum/config: {{ printf "%s-%s" (toJson $grafana) .Chart.Version | sha256sum }}
     spec:
       {{- if $grafana.vpnAccess.enabled }}
@@ -399,7 +412,7 @@ spec:
             - name: GF_UNIFIED_ALERTING_ENABLED
               value: "false"
             - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
-              value: /etc/grafana/dashboards/heterocloud-flow.json
+              value: {{ ternary "/etc/grafana/dashboards/cluster-resources.json" "/etc/grafana/dashboards/heterocloud-flow.json" .Values.monitoring.resourceExporter.enabled }}
             - name: GF_DATE_FORMATS_DEFAULT_TIMEZONE
               value: browser
           readinessProbe:
@@ -456,12 +469,16 @@ spec:
               - key: dashboards.yaml
                 path: dashboards/managed.yaml
         - name: dashboards
-          configMap:
-            name: {{ $grafanaName }}
+          projected:
             defaultMode: 0444
-            items:
-              - key: heterocloud-flow.json
-                path: heterocloud-flow.json
+            sources:
+              - configMap:
+                  name: {{ $grafanaName }}
+                  items:
+                    - key: heterocloud-flow.json
+                      path: heterocloud-flow.json
+              - configMap:
+                  name: {{ $grafanaName }}-resources
         - name: data
           emptyDir:
             sizeLimit: 1Gi

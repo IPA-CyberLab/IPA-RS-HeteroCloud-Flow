@@ -1,0 +1,711 @@
+{
+  "uid": "heterocloud-user-resources",
+  "title": "HeteroCloud / ユーザー別サービス使用量",
+  "tags": [
+    "HeteroCloud",
+    "resources"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": false,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "user",
+        "label": "ユーザー",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "query_result(max by(user_id,user_name)(heterocloud_service_info))",
+        "query": {
+          "query": "query_result(max by(user_id,user_name)(heterocloud_service_info))",
+          "refId": "user"
+        },
+        "regex": "/user_id=\"(?<value>[^\"]+)\"|user_name=\"(?<text>[^\"]+)\"/g",
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {}
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "クラスターリソース",
+      "type": "link",
+      "url": "/d/heterocloud-cluster-resources/overview",
+      "keepTime": true
+    },
+    {
+      "title": "Flow / VPN",
+      "type": "link",
+      "url": "/d/heterocloud-flow-overview/",
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "CPU 使用量（コア）",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_cpu_usage_cores{user_id=~\"${user:regex}\"}))",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "メモリ使用量",
+      "type": "stat",
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_memory_working_set_bytes{user_id=~\"${user:regex}\"}))",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "ディスク実使用量（取得済み分）",
+      "type": "stat",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_disk_observed_bytes{user_id=~\"${user:regex}\"}))",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "ユーザー内のサービス別内訳",
+      "type": "text",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 24,
+        "h": 3
+      },
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "選択したユーザーが作成したサービスと、そこからタスクロールで作成された子サービスの実使用量です。サービスを編集した管理者への付け替えは行いません。停止中のサービスはCPU・メモリが0になり、取得できないディスク使用量は **未取得** と表示します。"
+      }
+    },
+    {
+      "id": 10,
+      "title": "CPU / サービス",
+      "type": "piechart",
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 12,
+        "h": 9
+      },
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "tooltip": {
+          "mode": "single",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value",
+            "percent"
+          ]
+        },
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_cpu_usage_cores{user_id=~\"${user:regex}\"})",
+          "legendFormat": "{{service_name}}",
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "メモリ / サービス",
+      "type": "piechart",
+      "gridPos": {
+        "x": 12,
+        "y": 7,
+        "w": 12,
+        "h": 9
+      },
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "tooltip": {
+          "mode": "single",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value",
+            "percent"
+          ]
+        },
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_memory_working_set_bytes{user_id=~\"${user:regex}\"})",
+          "legendFormat": "{{service_name}}",
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "ディスク / サービス（取得済み分）",
+      "type": "piechart",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 9
+      },
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "tooltip": {
+          "mode": "single",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value",
+            "percent"
+          ]
+        },
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_disk_observed_bytes{user_id=~\"${user:regex}\"})",
+          "legendFormat": "{{service_name}}",
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "永続ディスク確保容量 / サービス",
+      "type": "bargauge",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 9
+      },
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_persistent_disk_capacity_bytes{user_id=~\"${user:regex}\"})",
+          "legendFormat": "{{service_name}}",
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "title": "サービス別の実使用量と取得状態",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 24,
+        "h": 10
+      },
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          },
+          "noValue": "未取得"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "メモリ使用量"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ディスク使用量"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "永続ディスク確保容量"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_info{user_id=~\"${user:regex}\"})",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_cpu_usage_cores{user_id=~\"${user:regex}\"})",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_memory_working_set_bytes{user_id=~\"${user:regex}\"})",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_disk_usage_bytes{user_id=~\"${user:regex}\"})",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_persistent_disk_capacity_bytes{user_id=~\"${user:regex}\"})",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "organization_id": true,
+              "user_id": true,
+              "user_name": true,
+              "Value #A": true
+            },
+            "renameByName": {
+              "service_id": "サービスID",
+              "service_name": "サービス",
+              "Value #B": "CPU（コア）",
+              "Value #C": "メモリ使用量",
+              "Value #D": "ディスク使用量",
+              "Value #E": "永続ディスク確保容量"
+            },
+            "indexByName": {
+              "service_name": 0,
+              "Value #B": 1,
+              "Value #C": 2,
+              "Value #D": 3,
+              "Value #E": 4,
+              "service_id": 5
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
