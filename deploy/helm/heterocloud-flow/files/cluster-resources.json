@@ -7,7 +7,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 41,
-  "version": 2,
+  "version": 3,
   "editable": false,
   "refresh": "30s",
   "time": {
@@ -82,7 +82,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(max by (node) (heterocloud_node_cpu_capacity_cores))",
+          "expr": "sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))",
           "legendFormat": "",
           "instant": true,
           "range": false,
@@ -140,7 +140,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(max by (node) (heterocloud_node_cpu_usage_cores))",
+          "expr": "sum((max by (node) (heterocloud_node_cpu_usage_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))",
           "legendFormat": "",
           "instant": true,
           "range": false,
@@ -198,7 +198,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(max by (node) (heterocloud_node_memory_capacity_bytes))",
+          "expr": "sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))",
           "legendFormat": "",
           "instant": true,
           "range": false,
@@ -256,7 +256,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(max by (node) (heterocloud_node_memory_working_set_bytes))",
+          "expr": "sum((max by (node) (heterocloud_node_memory_working_set_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))",
           "legendFormat": "",
           "instant": true,
           "range": false,
@@ -314,7 +314,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(max by (node) (heterocloud_node_disk_capacity_bytes))",
+          "expr": "sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))",
           "legendFormat": "",
           "instant": true,
           "range": false,
@@ -372,7 +372,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(max by (node) (heterocloud_node_disk_usage_bytes))",
+          "expr": "sum((max by (node) (heterocloud_node_disk_usage_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))",
           "legendFormat": "",
           "instant": true,
           "range": false,
@@ -413,7 +413,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "左の円グラフは **物理マシン別の容量**、右は **ユーザー別の実使用量** です。ホバーで名前・容量・割合を表示します。**右のユーザーをクリックするとサービス別の内訳が開きます。**\n\nCPU は論理コア、メモリは working set、ディスク容量は各ノードの主ファイルシステムです。ユーザーのディスク使用量はコンテナの一時領域・ログ＋永続ボリューム（共有レプリカは1回）を集計します。OS・基盤・共有イメージキャッシュ・ストレージ複製分はユーザー合計に含みません。"
+        "content": "左は **物理マシン別の容量**、右は **同じ容量に対するユーザー別の実使用量** です。**FlashのユーザーPodを配置するノードだけ**を集計し、p1〜p3などの専用マスターは含めません。右には **未使用** と **システム・未帰属** も含みます（例：1 TB中100 GB使用なら10%）。ホバーで内訳を確認し、**ユーザーの区画をクリックするとサービス別の内訳が開きます。**\n\nCPUは論理コア、メモリはworking set、ディスクはノードの主ファイルシステムです。ユーザーのディスクは一時領域・ログ＋永続ボリュームを集計し、共有レプリカは1回だけ数えます。"
       }
     },
     {
@@ -426,7 +426,7 @@
         "w": 12,
         "h": 9
       },
-      "description": "現在登録されているKubernetesノードの容量。ホバーでマシン名と値を表示。ディスクはKubeletのnode.fs（主ファイルシステム）で、別マウント・未マウントのディスクは含みません。",
+      "description": "FlashのユーザーPodを配置するノードの容量。専用マスターは除外します。ホバーでマシン名と値を表示。ディスクは主ファイルシステム（node.fs）の容量で、別マウント・未マウントのディスクは含みません。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -480,7 +480,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max by (node) (heterocloud_node_cpu_capacity_cores)",
+          "expr": "(max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))",
           "legendFormat": "{{node}}",
           "instant": true,
           "range": false,
@@ -498,7 +498,7 @@
         "w": 12,
         "h": 9
       },
-      "description": "クリックでサービス別内訳へ。作成者に帰属し、タスクロール経由は親の作成者へ集計。所有者が一意に決まらないサービスアカウントはSAとして表示。容量の予約値・上限値ではありません。",
+      "description": "Flash配置対象ノードの総容量を100%として、ユーザー実使用量＋システム・未帰属＋未使用を表示。1 TB中100 GBを使うユーザーは10%。ユーザーの区画をクリックするとサービス別内訳へ。システム・未帰属にはOS、基盤、ストレージ複製、未計測のユーザー使用分を含みます。ノードの測定が欠ける場合や使用量が容量を超える矛盾がある場合、空きを推測せずNo dataにします。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -515,16 +515,66 @@
               "tooltip": false,
               "viz": false
             }
-          },
-          "links": [
-            {
-              "title": "このユーザーのサービス別使用量",
-              "url": "/d/heterocloud-user-resources/usage?var-user=${__field.labels.user_id}&${__url_time_range}",
-              "targetBlank": false
-            }
-          ]
+          }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "このユーザーのサービス別使用量",
+                    "url": "/d/heterocloud-user-resources/usage?var-user=${__field.labels.user_id}&${__url_time_range}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FFB357"
+                }
+              },
+              {
+                "id": "links",
+                "value": []
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#546E7A"
+                }
+              },
+              {
+                "id": "links",
+                "value": []
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "pieType": "donut",
@@ -559,8 +609,32 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_cpu_usage_cores))",
+          "expr": "(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_cpu_usage_cores))) and on() ((count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_cpu_usage_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) > 0) and on() (sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= sum((max by (node) (heterocloud_node_cpu_usage_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_cpu_usage_cores))) or on() (0 * sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))))))",
           "legendFormat": "{{user_name}}",
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(clamp_min(sum((max by (node) (heterocloud_node_cpu_usage_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) - (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_cpu_usage_cores))) or on() (0 * sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))))), 0)) and on() ((count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_cpu_usage_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) > 0) and on() (sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= sum((max by (node) (heterocloud_node_cpu_usage_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_cpu_usage_cores))) or on() (0 * sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))))))",
+          "legendFormat": "システム・未帰属",
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(clamp_min(sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) - (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_cpu_usage_cores))) or on() (0 * sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))))) - clamp_min(sum((max by (node) (heterocloud_node_cpu_usage_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) - (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_cpu_usage_cores))) or on() (0 * sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))))), 0), 0)) and on() ((count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_cpu_usage_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) > 0) and on() (sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= sum((max by (node) (heterocloud_node_cpu_usage_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_cpu_usage_cores))) or on() (0 * sum((max by (node) (heterocloud_node_cpu_capacity_cores) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))))))",
+          "legendFormat": "未使用",
           "instant": true,
           "range": false,
           "format": "time_series"
@@ -577,7 +651,7 @@
         "w": 12,
         "h": 9
       },
-      "description": "現在登録されているKubernetesノードの容量。ホバーでマシン名と値を表示。ディスクはKubeletのnode.fs（主ファイルシステム）で、別マウント・未マウントのディスクは含みません。",
+      "description": "FlashのユーザーPodを配置するノードの容量。専用マスターは除外します。ホバーでマシン名と値を表示。ディスクは主ファイルシステム（node.fs）の容量で、別マウント・未マウントのディスクは含みません。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -631,7 +705,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max by (node) (heterocloud_node_memory_capacity_bytes)",
+          "expr": "(max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))",
           "legendFormat": "{{node}}",
           "instant": true,
           "range": false,
@@ -649,7 +723,7 @@
         "w": 12,
         "h": 9
       },
-      "description": "クリックでサービス別内訳へ。作成者に帰属し、タスクロール経由は親の作成者へ集計。所有者が一意に決まらないサービスアカウントはSAとして表示。容量の予約値・上限値ではありません。",
+      "description": "Flash配置対象ノードの総容量を100%として、ユーザー実使用量＋システム・未帰属＋未使用を表示。1 TB中100 GBを使うユーザーは10%。ユーザーの区画をクリックするとサービス別内訳へ。システム・未帰属にはOS、基盤、ストレージ複製、未計測のユーザー使用分を含みます。ノードの測定が欠ける場合や使用量が容量を超える矛盾がある場合、空きを推測せずNo dataにします。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -666,16 +740,66 @@
               "tooltip": false,
               "viz": false
             }
-          },
-          "links": [
-            {
-              "title": "このユーザーのサービス別使用量",
-              "url": "/d/heterocloud-user-resources/usage?var-user=${__field.labels.user_id}&${__url_time_range}",
-              "targetBlank": false
-            }
-          ]
+          }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "このユーザーのサービス別使用量",
+                    "url": "/d/heterocloud-user-resources/usage?var-user=${__field.labels.user_id}&${__url_time_range}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FFB357"
+                }
+              },
+              {
+                "id": "links",
+                "value": []
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#546E7A"
+                }
+              },
+              {
+                "id": "links",
+                "value": []
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "pieType": "donut",
@@ -710,8 +834,32 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_memory_working_set_bytes))",
+          "expr": "(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_memory_working_set_bytes))) and on() ((count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_memory_working_set_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) > 0) and on() (sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= sum((max by (node) (heterocloud_node_memory_working_set_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_memory_working_set_bytes))) or on() (0 * sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))))))",
           "legendFormat": "{{user_name}}",
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(clamp_min(sum((max by (node) (heterocloud_node_memory_working_set_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) - (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_memory_working_set_bytes))) or on() (0 * sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))))), 0)) and on() ((count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_memory_working_set_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) > 0) and on() (sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= sum((max by (node) (heterocloud_node_memory_working_set_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_memory_working_set_bytes))) or on() (0 * sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))))))",
+          "legendFormat": "システム・未帰属",
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(clamp_min(sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) - (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_memory_working_set_bytes))) or on() (0 * sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))))) - clamp_min(sum((max by (node) (heterocloud_node_memory_working_set_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) - (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_memory_working_set_bytes))) or on() (0 * sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))))), 0), 0)) and on() ((count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_memory_working_set_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) > 0) and on() (sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= sum((max by (node) (heterocloud_node_memory_working_set_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_memory_working_set_bytes))) or on() (0 * sum((max by (node) (heterocloud_node_memory_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))))))",
+          "legendFormat": "未使用",
           "instant": true,
           "range": false,
           "format": "time_series"
@@ -728,7 +876,7 @@
         "w": 12,
         "h": 9
       },
-      "description": "現在登録されているKubernetesノードの容量。ホバーでマシン名と値を表示。ディスクはKubeletのnode.fs（主ファイルシステム）で、別マウント・未マウントのディスクは含みません。",
+      "description": "FlashのユーザーPodを配置するノードの容量。専用マスターは除外します。ホバーでマシン名と値を表示。ディスクは主ファイルシステム（node.fs）の容量で、別マウント・未マウントのディスクは含みません。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -782,7 +930,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max by (node) (heterocloud_node_disk_capacity_bytes)",
+          "expr": "(max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))",
           "legendFormat": "{{node}}",
           "instant": true,
           "range": false,
@@ -800,7 +948,7 @@
         "w": 12,
         "h": 9
       },
-      "description": "クリックでサービス別内訳へ。作成者に帰属し、タスクロール経由は親の作成者へ集計。所有者が一意に決まらないサービスアカウントはSAとして表示。容量の予約値・上限値ではありません。",
+      "description": "Flash配置対象ノードの総容量を100%として、ユーザー実使用量＋システム・未帰属＋未使用を表示。1 TB中100 GBを使うユーザーは10%。ユーザーの区画をクリックするとサービス別内訳へ。システム・未帰属にはOS、基盤、ストレージ複製、未計測のユーザー使用分を含みます。ノードの測定が欠ける場合や使用量が容量を超える矛盾がある場合、空きを推測せずNo dataにします。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -817,16 +965,66 @@
               "tooltip": false,
               "viz": false
             }
-          },
-          "links": [
-            {
-              "title": "このユーザーのサービス別使用量",
-              "url": "/d/heterocloud-user-resources/usage?var-user=${__field.labels.user_id}&${__url_time_range}",
-              "targetBlank": false
-            }
-          ]
+          }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "このユーザーのサービス別使用量",
+                    "url": "/d/heterocloud-user-resources/usage?var-user=${__field.labels.user_id}&${__url_time_range}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FFB357"
+                }
+              },
+              {
+                "id": "links",
+                "value": []
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#546E7A"
+                }
+              },
+              {
+                "id": "links",
+                "value": []
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "pieType": "donut",
@@ -861,8 +1059,32 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_disk_observed_bytes))",
+          "expr": "(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_disk_observed_bytes))) and on() ((count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_disk_usage_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) > 0) and on() (sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= sum((max by (node) (heterocloud_node_disk_usage_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_disk_observed_bytes))) or on() (0 * sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))))))",
           "legendFormat": "{{user_name}}",
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(clamp_min(sum((max by (node) (heterocloud_node_disk_usage_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) - (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_disk_observed_bytes))) or on() (0 * sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))))), 0)) and on() ((count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_disk_usage_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) > 0) and on() (sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= sum((max by (node) (heterocloud_node_disk_usage_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_disk_observed_bytes))) or on() (0 * sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))))))",
+          "legendFormat": "システム・未帰属",
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(clamp_min(sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) - (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_disk_observed_bytes))) or on() (0 * sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))))) - clamp_min(sum((max by (node) (heterocloud_node_disk_usage_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) - (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_disk_observed_bytes))) or on() (0 * sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))))), 0), 0)) and on() ((count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (count((min by (node) (heterocloud_node_workload_pool) == 1)) == count((max by (node) (heterocloud_node_disk_usage_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) > 0) and on() (sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= sum((max by (node) (heterocloud_node_disk_usage_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))) and on() (sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))) >= (sum(sum by (user_id,user_name) (max by (service_id,service_name,organization_id,user_id,user_name) (heterocloud_service_disk_observed_bytes))) or on() (0 * sum((max by (node) (heterocloud_node_disk_capacity_bytes) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1)))))))",
+          "legendFormat": "未使用",
           "instant": true,
           "range": false,
           "format": "time_series"
@@ -871,7 +1093,7 @@
     },
     {
       "id": 20,
-      "title": "取得できたノード数",
+      "title": "取得できたFlashノード数",
       "type": "stat",
       "gridPos": {
         "x": 0,
@@ -919,7 +1141,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(max by(node)(heterocloud_resource_node_scrape_success))",
+          "expr": "sum(max by (node) (heterocloud_resource_node_scrape_success) and on(node) (min by (node) (heterocloud_node_workload_pool) == 1))",
           "legendFormat": "",
           "instant": true,
           "range": false,
@@ -929,7 +1151,7 @@
     },
     {
       "id": 21,
-      "title": "登録ノード数",
+      "title": "Flash配置対象ノード数",
       "type": "stat",
       "gridPos": {
         "x": 8,
@@ -977,7 +1199,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "count(max by (node) (heterocloud_node_cpu_capacity_cores))",
+          "expr": "count((min by (node) (heterocloud_node_workload_pool) == 1))",
           "legendFormat": "",
           "instant": true,
           "range": false,
@@ -1076,7 +1298,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "30秒ごとに更新し、ノード・ユーザー・サービスの追加と削除を自動反映します。停止中などの未取得ディスクは0と確定せず、上の未取得件数とユーザー詳細で確認できます。左と右は「物理容量」と「利用者が実際に消費した量」で母数が異なります。"
+        "content": "Flashのランタイム対応ラベルと専用マスターのtaintから配置対象を判定し、30秒ごとにノード・ユーザー・サービスの追加と削除を反映します。一時的なNotReadyやcordonだけでは総容量を減らしません。停止中などの未取得ディスクは0と確定せず、未取得件数とユーザー詳細で確認できます。システム・未帰属は対象ノードの総使用量から取得済みのユーザー使用量を差し引いた分です。ノードの取得に失敗した場合、空き容量は推測しません。"
       }
     }
   ]

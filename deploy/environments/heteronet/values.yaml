@@ -204,7 +204,7 @@ coturn:
 monitoring:
   resourceExporter:
     enabled: true
-    image: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-resource-exporter:1ec128b3da0ba303b16bb4bc2b88aa72034ab233@sha256:9a6ee1b2971dc684437f419b742d77645fe04d2d68c5dabaa0002719678e8a6d
+    image: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-resource-exporter:bddbdc8cb8f8430a911dc21985e250a2ddd2e53b@sha256:66589e20725598c094d5b947b79b0438e1ac54c161cb7fc952a3041e1b891f57
     nodeSelector:
       monitoring.heteronetwork.io/ha: "true"
     metricsSourceCidrs:

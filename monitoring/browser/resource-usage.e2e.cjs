@@ -24,6 +24,19 @@ async function insidePoint(slice) {
   });
 }
 
+async function hoverLegend(page, chart, name) {
+  const names = await chart.locator('tbody tr td:nth-child(2)').allTextContents();
+  const index = names.findIndex(n => n.trim() === name);
+  expect(index, 'Legend contains ' + name).toBeGreaterThanOrEqual(0);
+  await page.mouse.move(1,1);
+  await page.waitForTimeout(200);
+  const before = await page.getByText(name,{exact:true}).count();
+  const point = await insidePoint(slices(chart).nth(index));
+  await page.mouse.move(point.x,point.y);
+  await expect.poll(() => page.getByText(name,{exact:true}).count()).toBeGreaterThan(before);
+  return point;
+}
+
 (async () => {
   await fs.mkdir(out, {recursive:true});
   const browser = await chromium.launch({headless:true, args:['--no-sandbox']});
@@ -36,6 +49,15 @@ async function insidePoint(slice) {
     const inventory = (await response.json()).data.result.map(x => x.metric);
     expect(inventory.length).toBeGreaterThan(0);
     const users = [...new Set(inventory.map(x => x.user_id))];
+    const query = async (expr, time) => {
+      const r = await page.request.get(base + '/api/datasources/proxy/uid/prometheus/api/v1/query', {
+        params:{query:expr, time:String(time || Math.floor(Date.now()/1000))}});
+      expect(r.ok()).toBeTruthy();
+      const body = await r.json(); expect(body.status).toBe('success'); return body.data.result;
+    };
+    const workerNodes = (await query('min by (node) (heterocloud_node_workload_pool) == 1')).map(x=>x.metric.node).sort();
+    expect(workerNodes.length).toBeGreaterThan(0);
+    const dashboard = (await (await page.request.get(base + '/api/dashboards/uid/heterocloud-cluster-resources')).json()).dashboard;
     for (const resource of ['CPU','メモリ','ディスク']) {
       await page.goto(base + overview, {waitUntil:'domcontentloaded'});
       const physical = panel(page, resource + ' 容量 / 物理マシン');
@@ -44,6 +66,8 @@ async function insidePoint(slice) {
       await expect(physical).not.toContainText('No data');
       const names = await physical.locator('tbody tr').allInnerTexts();
       expect(names.length).toBeGreaterThan(0);
+      const physicalNodes = (await physical.locator('tbody tr td:nth-child(2)').allTextContents()).map(x=>x.trim()).sort();
+      expect(physicalNodes).toEqual(workerNodes);
       const name = (await physical.locator('tbody tr').first().locator('td').nth(1).innerText()).trim();
       await page.mouse.move(1,1);
       await page.waitForTimeout(200);
@@ -52,10 +76,27 @@ async function insidePoint(slice) {
       await page.mouse.move(hover.x,hover.y);
       await expect.poll(() => page.getByText(name,{exact:true}).count()).toBeGreaterThan(before);
       await page.screenshot({path:path.join(out,resource+'-node-hover.png')});
-      evidence.checks.push({resource,node_hover:true,node:name});
+      evidence.checks.push({resource,node_hover:true,node:name,physical_nodes:physicalNodes});
       const usage = panel(page, resource + ' 実使用量 / ユーザー' + (resource==='ディスク'?'（取得済み分）':''));
       await usage.scrollIntoViewIfNeeded();
-      const click = await insidePoint(slices(usage).first());
+      await expect(usage).toContainText('未使用',{timeout:30000});
+      await expect(usage).toContainText('システム・未帰属');
+      const timestamp = Math.floor(Date.now()/1000);
+      const usagePanel = dashboard.panels.find(x=>x.title===resource+' 実使用量 / ユーザー'+(resource==='ディスク'?'（取得済み分）':''));
+      const capacityPanel = dashboard.panels.find(x=>x.title===resource+' 容量 / 物理マシン');
+      const parts = await Promise.all(usagePanel.targets.map(t=>query(t.expr,timestamp)));
+      const capacity = (await query(capacityPanel.targets[0].expr,timestamp)).reduce((n,x)=>n+Number(x.value[1]),0);
+      const chartTotal = parts.flat().reduce((n,x)=>n+Number(x.value[1]),0);
+      expect(Math.abs(chartTotal-capacity)/capacity).toBeLessThan(0.000001);
+      const free = await hoverLegend(page,usage,'未使用');
+      await page.mouse.click(free.x,free.y);
+      await expect(page).toHaveURL(/\/d\/heterocloud-cluster-resources\//);
+      await page.screenshot({path:path.join(out,resource+'-capacity-denominator.png')});
+      evidence.checks.push({resource,capacity_denominator:true,capacity,chart_total:chartTotal,unused_has_no_user_link:true});
+      const userNames = (await usage.locator('tbody tr td:nth-child(2)').allTextContents()).map(x=>x.trim());
+      const userName = userNames.find(n=>inventory.some(x=>x.user_name===n));
+      expect(userName).toBeTruthy();
+      const click = await hoverLegend(page,usage,userName);
       await page.mouse.click(click.x,click.y);
       await expect(page).toHaveURL(/\/d\/heterocloud-user-resources\//);
       const uid = new URL(page.url()).searchParams.get('var-user');

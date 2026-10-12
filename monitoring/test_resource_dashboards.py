@@ -27,9 +27,15 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(p['options']['tooltip']['mode'], 'single')
             self.assertTrue(p['targets'][0]['instant'])
             if 'ユーザー' in p['title']:
-                links = p['fieldConfig']['defaults']['links']
+                self.assertNotIn('links', p['fieldConfig']['defaults'])
+                user_override = next(x for x in p['fieldConfig']['overrides'] if x['matcher'] == {'id': 'byFrameRefID', 'options': 'A'})
+                links = next(x['value'] for x in user_override['properties'] if x['id'] == 'links')
                 self.assertEqual(len(links), 1)
                 self.assertIn('var-user=${__field.labels.user_id}', links[0]['url'])
+                self.assertEqual([t['refId'] for t in p['targets']], ['A', 'B', 'C'])
+                self.assertEqual([t['legendFormat'] for t in p['targets'][1:]], ['システム・未帰属', '未使用'])
+                for override in p['fieldConfig']['overrides'][1:]:
+                    self.assertIn({'id': 'links', 'value': []}, override['properties'])
         detail = self.dashboards['user-resources.json']
         for p in detail['panels']:
             for t in p.get('targets', []):
@@ -40,8 +46,15 @@ class DashboardTests(unittest.TestCase):
         for key in ('cluster-resources.json', 'user-resources.json'):
             for panel in self.dashboards[key]['panels']:
                 for target in panel.get('targets', []):
-                    self.assertIn('max by', target['expr'])
+                    self.assertTrue('max by' in target['expr'] or 'min by' in target['expr'])
                     self.assertNotIn('or vector(0)', target['expr'])
+
+    def test_node_charts_exclude_dedicated_masters(self):
+        for panel in self.dashboards['cluster-resources.json']['panels']:
+            if panel['id'] == 22:  # Missing service disk measurements.
+                continue
+            for target in panel.get('targets', []):
+                self.assertIn('heterocloud_node_workload_pool', target['expr'])
 
     def test_private_exporter_and_minimal_permissions(self):
         deployment = next(o for o in self.objects if o['kind'] == 'Deployment' and o['metadata']['name'].endswith('-resources'))
