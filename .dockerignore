@@ -3,4 +3,4 @@
 target
 deploy/helm/heterocloud-flow/charts
 *.md
-
+.security-tooling
