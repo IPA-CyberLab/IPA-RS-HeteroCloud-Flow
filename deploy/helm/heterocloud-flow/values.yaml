@@ -249,6 +249,11 @@ externalRedis:
   sentinelPasswordSecretKey: ""
 
 monitoring:
+  securityInventory:
+    enabled: false
+    # Targets must use the private network; only aggregate counts are exposed.
+    targets: []
+    maxAgeSeconds: 3600
   resourceExporter:
     enabled: false
     replicaCount: 2

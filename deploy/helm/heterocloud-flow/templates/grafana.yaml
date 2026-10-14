@@ -296,6 +296,8 @@ data:
 {{ .Files.Get "files/cluster-resources.json" | indent 4 }}
   user-resources.json: |
 {{ .Files.Get "files/user-resources.json" | indent 4 }}
+  oss-security.json: |
+{{ .Files.Get "files/oss-security.json" | indent 4 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -321,7 +323,7 @@ spec:
         {{- include "flow.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: grafana
       annotations:
-        checksum/resource-dashboards: {{ printf "%s%s" (.Files.Get "files/cluster-resources.json") (.Files.Get "files/user-resources.json") | sha256sum }}
+        checksum/resource-dashboards: {{ printf "%s%s%s" (.Files.Get "files/cluster-resources.json") (.Files.Get "files/user-resources.json") (.Files.Get "files/oss-security.json") | sha256sum }}
         checksum/config: {{ printf "%s-%s" (toJson $grafana) .Chart.Version | sha256sum }}
     spec:
       {{- if $grafana.vpnAccess.enabled }}

@@ -18,7 +18,10 @@
     "databaseTls": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["caSecretName", "caSecretKey"],
+      "required": [
+        "caSecretName",
+        "caSecretKey"
+      ],
       "properties": {
         "caSecretName": {
           "type": "string",
@@ -35,18 +38,35 @@
     },
     "runtime": {
       "type": "object",
-      "required": ["hostNetwork"],
+      "required": [
+        "hostNetwork"
+      ],
       "properties": {
-        "hostNetwork": {"type": "boolean"}
+        "hostNetwork": {
+          "type": "boolean"
+        }
       }
     },
     "providerAuth": {
       "type": "object",
-      "required": ["issuer", "audience", "publicKeysSecretKey"],
+      "required": [
+        "issuer",
+        "audience",
+        "publicKeysSecretKey"
+      ],
       "properties": {
-        "issuer": {"type": "string", "minLength": 1},
-        "audience": {"type": "string", "minLength": 1},
-        "publicKeysSecretKey": {"type": "string", "minLength": 1}
+        "issuer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "audience": {
+          "type": "string",
+          "minLength": 1
+        },
+        "publicKeysSecretKey": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "principalAuth": {
@@ -58,20 +78,33 @@
         "contextSecretKey"
       ],
       "properties": {
-        "issuer": {"type": "string", "minLength": 1},
-        "audience": {"type": "string", "minLength": 1},
+        "issuer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "audience": {
+          "type": "string",
+          "minLength": 1
+        },
         "maxTokenTtlSeconds": {
           "type": "integer",
           "minimum": 30,
           "maximum": 3600
         },
-        "contextSecretKey": {"type": "string", "minLength": 1}
+        "contextSecretKey": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "rateLimit": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestsPerSecond", "burst", "trustedProxyCidrs"],
+      "required": [
+        "requestsPerSecond",
+        "burst",
+        "trustedProxyCidrs"
+      ],
       "properties": {
         "requestsPerSecond": {
           "type": "integer",
@@ -88,13 +121,21 @@
           "minItems": 1,
           "maxItems": 64,
           "uniqueItems": true,
-          "items": {"type": "string", "minLength": 3, "maxLength": 64}
+          "items": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 64
+          }
         }
       }
     },
     "database": {
       "type": "object",
-      "required": ["externalPort", "nodeSelector", "maxConnections"],
+      "required": [
+        "externalPort",
+        "nodeSelector",
+        "maxConnections"
+      ],
       "properties": {
         "externalPort": {
           "type": "integer",
@@ -104,7 +145,9 @@
         "proxy": {
           "type": "object",
           "properties": {
-            "enabled": {"type": "boolean"},
+            "enabled": {
+              "type": "boolean"
+            },
             "port": {
               "type": "integer",
               "minimum": 1,
@@ -113,40 +156,77 @@
             "addresses": {
               "type": "array",
               "uniqueItems": true,
-              "items": {"type": "string", "minLength": 7, "maxLength": 45}
+              "items": {
+                "type": "string",
+                "minLength": 7,
+                "maxLength": 45
+              }
             },
             "endpointNodeNames": {
               "type": "object",
-              "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 63}
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 63
+              }
             }
           }
         },
         "nodeSelector": {
           "type": "object",
-          "additionalProperties": {"type": "string"}
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "maxConnections": {
           "type": "object",
-          "required": ["api", "matchmaker", "signaling"],
+          "required": [
+            "api",
+            "matchmaker",
+            "signaling"
+          ],
           "properties": {
-            "api": {"type": "integer", "minimum": 1, "maximum": 30},
-            "matchmaker": {"type": "integer", "minimum": 1, "maximum": 30},
-            "signaling": {"type": "integer", "minimum": 1, "maximum": 30}
+            "api": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30
+            },
+            "matchmaker": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30
+            },
+            "signaling": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30
+            }
           }
         }
       }
     },
     "api": {
       "type": "object",
-      "required": ["replicaCount", "publicUrls", "publicService"],
+      "required": [
+        "replicaCount",
+        "publicUrls",
+        "publicService"
+      ],
       "properties": {
-        "replicaCount": {"type": "integer", "minimum": 3, "maximum": 16},
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 16
+        },
         "publicUrls": {
           "type": "array",
           "minItems": 1,
           "maxItems": 16,
           "uniqueItems": true,
-          "items": {"type": "string", "pattern": "^https://"}
+          "items": {
+            "type": "string",
+            "pattern": "^https://"
+          }
         },
         "publicService": {
           "type": "object",
@@ -157,17 +237,25 @@
             "loadBalancerSourceRanges"
           ],
           "properties": {
-            "enabled": {"type": "boolean"},
+            "enabled": {
+              "type": "boolean"
+            },
             "port": {
               "type": "integer",
               "minimum": 1,
               "maximum": 65535
             },
-            "annotations": {"type": "object"},
+            "annotations": {
+              "type": "object"
+            },
             "loadBalancerSourceRanges": {
               "type": "array",
               "uniqueItems": true,
-              "items": {"type": "string", "minLength": 3, "maxLength": 64}
+              "items": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 64
+              }
             }
           }
         }
@@ -176,20 +264,33 @@
     "matchmaker": {
       "type": "object",
       "properties": {
-        "replicaCount": {"type": "integer", "minimum": 3}
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 3
+        }
       }
     },
     "signaling": {
       "type": "object",
-      "required": ["replicaCount", "publicUrls", "publicService"],
+      "required": [
+        "replicaCount",
+        "publicUrls",
+        "publicService"
+      ],
       "properties": {
-        "replicaCount": {"type": "integer", "minimum": 3},
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 3
+        },
         "publicUrls": {
           "type": "array",
           "minItems": 1,
           "maxItems": 16,
           "uniqueItems": true,
-          "items": {"type": "string", "pattern": "^wss://"}
+          "items": {
+            "type": "string",
+            "pattern": "^wss://"
+          }
         },
         "publicService": {
           "type": "object",
@@ -200,17 +301,25 @@
             "loadBalancerSourceRanges"
           ],
           "properties": {
-            "enabled": {"type": "boolean"},
+            "enabled": {
+              "type": "boolean"
+            },
             "port": {
               "type": "integer",
               "minimum": 1,
               "maximum": 65535
             },
-            "annotations": {"type": "object"},
+            "annotations": {
+              "type": "object"
+            },
             "loadBalancerSourceRanges": {
               "type": "array",
               "uniqueItems": true,
-              "items": {"type": "string", "minLength": 3, "maxLength": 64}
+              "items": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 64
+              }
             }
           }
         }
@@ -218,19 +327,33 @@
     },
     "livekit": {
       "type": "object",
-      "required": ["replicaCount", "publicUrls", "signal", "metrics"],
+      "required": [
+        "replicaCount",
+        "publicUrls",
+        "signal",
+        "metrics"
+      ],
       "properties": {
-        "replicaCount": {"type": "integer", "minimum": 3},
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 3
+        },
         "publicUrls": {
           "type": "array",
           "minItems": 1,
           "maxItems": 16,
           "uniqueItems": true,
-          "items": {"type": "string", "pattern": "^wss://"}
+          "items": {
+            "type": "string",
+            "pattern": "^wss://"
+          }
         },
         "signal": {
           "type": "object",
-          "required": ["servicePort", "publicService"],
+          "required": [
+            "servicePort",
+            "publicService"
+          ],
           "properties": {
             "servicePort": {
               "type": "integer",
@@ -246,13 +369,17 @@
                 "loadBalancerSourceRanges"
               ],
               "properties": {
-                "enabled": {"type": "boolean"},
+                "enabled": {
+                  "type": "boolean"
+                },
                 "port": {
                   "type": "integer",
                   "minimum": 1,
                   "maximum": 65535
                 },
-                "annotations": {"type": "object"},
+                "annotations": {
+                  "type": "object"
+                },
                 "loadBalancerSourceRanges": {
                   "type": "array",
                   "uniqueItems": true,
@@ -268,15 +395,27 @@
         },
         "metrics": {
           "type": "object",
-          "required": ["port", "urls"],
+          "required": [
+            "port",
+            "urls"
+          ],
           "properties": {
-            "discovery": {"type": "boolean"},
-            "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
+            "discovery": {
+              "type": "boolean"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 65535
+            },
             "urls": {
               "type": "array",
               "maxItems": 16,
               "uniqueItems": true,
-              "items": {"type": "string", "pattern": "^http://"}
+              "items": {
+                "type": "string",
+                "pattern": "^http://"
+              }
             }
           }
         }
@@ -284,9 +423,18 @@
     },
     "coturn": {
       "type": "object",
-      "required": ["replicaCount", "publicHosts", "relayAddress", "performance", "metrics"],
+      "required": [
+        "replicaCount",
+        "publicHosts",
+        "relayAddress",
+        "performance",
+        "metrics"
+      ],
       "properties": {
-        "replicaCount": {"type": "integer", "minimum": 3},
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 3
+        },
         "additionalPools": {
           "type": "array",
           "maxItems": 7,
@@ -308,11 +456,31 @@
                 "maxLength": 24,
                 "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
               },
-              "replicaCount": {"type": "integer", "minimum": 1, "maximum": 16},
-              "servicePort": {"type": "integer", "minimum": 1024, "maximum": 65535},
-              "relayPortMin": {"type": "integer", "minimum": 1024, "maximum": 65535},
-              "relayPortMax": {"type": "integer", "minimum": 1024, "maximum": 65535},
-              "metricsPort": {"type": "integer", "minimum": 1024, "maximum": 65535}
+              "replicaCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
+              },
+              "servicePort": {
+                "type": "integer",
+                "minimum": 1024,
+                "maximum": 65535
+              },
+              "relayPortMin": {
+                "type": "integer",
+                "minimum": 1024,
+                "maximum": 65535
+              },
+              "relayPortMax": {
+                "type": "integer",
+                "minimum": 1024,
+                "maximum": 65535
+              },
+              "metricsPort": {
+                "type": "integer",
+                "minimum": 1024,
+                "maximum": 65535
+              }
             }
           }
         },
@@ -330,11 +498,18 @@
         "relayAddress": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["mode", "mappings"],
+          "required": [
+            "mode",
+            "mappings"
+          ],
           "properties": {
             "mode": {
               "type": "string",
-              "enum": ["host", "direct-public", "one-to-one-nat"]
+              "enum": [
+                "host",
+                "direct-public",
+                "one-to-one-nat"
+              ]
             },
             "mappings": {
               "type": "array",
@@ -343,7 +518,11 @@
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["nodeName", "publicIp", "privateIp"],
+                "required": [
+                  "nodeName",
+                  "publicIp",
+                  "privateIp"
+                ],
                 "properties": {
                   "nodeName": {
                     "type": "string",
@@ -351,8 +530,14 @@
                     "maxLength": 253,
                     "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
                   },
-                  "publicIp": {"type": "string", "format": "ipv4"},
-                  "privateIp": {"type": "string", "format": "ipv4"}
+                  "publicIp": {
+                    "type": "string",
+                    "format": "ipv4"
+                  },
+                  "privateIp": {
+                    "type": "string",
+                    "format": "ipv4"
+                  }
                 }
               }
             }
@@ -383,13 +568,27 @@
             "tuningImage": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["repository", "tag", "pullPolicy"],
+              "required": [
+                "repository",
+                "tag",
+                "pullPolicy"
+              ],
               "properties": {
-                "repository": {"type": "string", "minLength": 1},
-                "tag": {"type": "string", "minLength": 1},
+                "repository": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "tag": {
+                  "type": "string",
+                  "minLength": 1
+                },
                 "pullPolicy": {
                   "type": "string",
-                  "enum": ["Always", "IfNotPresent", "Never"]
+                  "enum": [
+                    "Always",
+                    "IfNotPresent",
+                    "Never"
+                  ]
                 }
               }
             },
@@ -398,7 +597,9 @@
               "minimum": 262144,
               "maximum": 67108864
             },
-            "tuneHostUdpBuffers": {"type": "boolean"},
+            "tuneHostUdpBuffers": {
+              "type": "boolean"
+            },
             "hostReceiveBufferMaxBytes": {
               "type": "integer",
               "minimum": 262144,
@@ -418,76 +619,101 @@
         },
         "metrics": {
           "type": "object",
-          "required": ["port", "urls"],
+          "required": [
+            "port",
+            "urls"
+          ],
           "properties": {
-            "discovery": {"type": "boolean"},
-            "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
+            "discovery": {
+              "type": "boolean"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 65535
+            },
             "urls": {
               "type": "array",
               "maxItems": 16,
               "uniqueItems": true,
-              "items": {"type": "string", "pattern": "^http://"}
+              "items": {
+                "type": "string",
+                "pattern": "^http://"
+              }
             }
           }
         },
         "nodeSelector": {
           "type": "object",
-          "additionalProperties": {"type": "string"}
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },
     "monitoring": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["prometheus", "grafana"],
+      "required": [
+        "prometheus",
+        "grafana"
+      ],
       "properties": {
-      "resourceExporter": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "enabled": {
-            "type": "boolean"
-          },
-          "replicaCount": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 3
-          },
-          "image": {
-            "type": "string"
-          },
-          "workloadNamespace": {
-            "type": "string",
-            "minLength": 1
-          },
-          "existingSecret": {
-            "type": "string",
-            "minLength": 1
-          },
-          "nodeSelector": {
-            "type": "object",
-            "additionalProperties": {
+        "resourceExporter": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "replicaCount": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3
+            },
+            "image": {
               "type": "string"
-            }
-          },
-          "resources": {
-            "type": "object"
-          },
-          "metricsSourceCidrs": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "databasePorts": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 1, "maximum": 65535}},
-          "databaseCidrs": {
-            "type": "array",
-            "items": {
-              "type": "string"
+            },
+            "workloadNamespace": {
+              "type": "string",
+              "minLength": 1
+            },
+            "existingSecret": {
+              "type": "string",
+              "minLength": 1
+            },
+            "nodeSelector": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "resources": {
+              "type": "object"
+            },
+            "metricsSourceCidrs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "databasePorts": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              }
+            },
+            "databaseCidrs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           }
-        }
-      },
+        },
         "prometheus": {
           "type": "object",
           "additionalProperties": false,
@@ -513,10 +739,20 @@
             "resources"
           ],
           "properties": {
-            "enabled": {"type": "boolean"},
-            "replicaCount": {"type": "integer", "minimum": 1, "maximum": 64},
-            "image": {"$ref": "#/$defs/containerImage"},
-            "initImage": {"$ref": "#/$defs/containerImage"},
+            "enabled": {
+              "type": "boolean"
+            },
+            "replicaCount": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "image": {
+              "$ref": "#/$defs/containerImage"
+            },
+            "initImage": {
+              "$ref": "#/$defs/containerImage"
+            },
             "scrapeInterval": {
               "type": "string",
               "pattern": "^[1-9][0-9]*(ms|s|m|h)$"
@@ -536,7 +772,10 @@
             "externalLabels": {
               "type": "object",
               "minProperties": 1,
-              "additionalProperties": {"type": "string", "minLength": 1}
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "additionalScrapeNamespaces": {
               "type": "array",
@@ -558,36 +797,72 @@
                 "loadBalancerSourceRanges"
               ],
               "properties": {
-                "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
-                "type": {"type": "string", "enum": ["ClusterIP", "LoadBalancer"]},
-                "loadBalancerClass": {"type": "string", "maxLength": 253},
-                "ingressReplicas": {"type": "integer", "minimum": 1, "maximum": 64},
+                "port": {
+                  "type": "integer",
+                  "minimum": 1024,
+                  "maximum": 65535
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "ClusterIP",
+                    "LoadBalancer"
+                  ]
+                },
+                "loadBalancerClass": {
+                  "type": "string",
+                  "maxLength": 253
+                },
+                "ingressReplicas": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 64
+                },
                 "loadBalancerSourceRanges": {
                   "type": "array",
                   "uniqueItems": true,
-                  "items": {"type": "string", "minLength": 3, "maxLength": 49}
+                  "items": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 49
+                  }
                 }
               }
             },
             "vpnAccess": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["enabled", "sourceCidrs"],
+              "required": [
+                "enabled",
+                "sourceCidrs"
+              ],
               "properties": {
-                "enabled": {"type": "boolean"},
+                "enabled": {
+                  "type": "boolean"
+                },
                 "sourceCidrs": {
                   "type": "array",
                   "uniqueItems": true,
-                  "items": {"type": "string", "minLength": 3, "maxLength": 49}
+                  "items": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 49
+                  }
                 }
               }
             },
             "heteronetwork": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["enabled", "agentMetricsPort", "interface"],
+              "required": [
+                "enabled",
+                "agentMetricsPort",
+                "interface"
+              ],
               "properties": {
-                "enabled": {"type": "boolean"},
+                "enabled": {
+                  "type": "boolean"
+                },
                 "agentMetricsPort": {
                   "type": "integer",
                   "minimum": 1024,
@@ -602,23 +877,42 @@
             "storage": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["type", "emptyDir", "hostPath"],
+              "required": [
+                "type",
+                "emptyDir",
+                "hostPath"
+              ],
               "properties": {
-                "type": {"type": "string", "enum": ["emptyDir", "hostPath"]},
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "emptyDir",
+                    "hostPath"
+                  ]
+                },
                 "emptyDir": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["sizeLimit"],
+                  "required": [
+                    "sizeLimit"
+                  ],
                   "properties": {
-                    "sizeLimit": {"type": "string", "pattern": "^[1-9][0-9]*(Mi|Gi|Ti)$"}
+                    "sizeLimit": {
+                      "type": "string",
+                      "pattern": "^[1-9][0-9]*(Mi|Gi|Ti)$"
+                    }
                   }
                 },
-                "hostPath": {"type": "string"}
+                "hostPath": {
+                  "type": "string"
+                }
               }
             },
             "nodeSelector": {
               "type": "object",
-              "additionalProperties": {"type": "string"}
+              "additionalProperties": {
+                "type": "string"
+              }
             },
             "allowedNodes": {
               "type": "array",
@@ -631,18 +925,31 @@
             },
             "tolerations": {
               "type": "array",
-              "items": {"type": "object"}
+              "items": {
+                "type": "object"
+              }
             },
             "podDisruptionBudget": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["enabled", "minAvailable"],
+              "required": [
+                "enabled",
+                "minAvailable"
+              ],
               "properties": {
-                "enabled": {"type": "boolean"},
-                "minAvailable": {"type": "integer", "minimum": 1, "maximum": 64}
+                "enabled": {
+                  "type": "boolean"
+                },
+                "minAvailable": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 64
+                }
               }
             },
-            "resources": {"type": "object"}
+            "resources": {
+              "type": "object"
+            }
           }
         },
         "grafana": {
@@ -666,27 +973,66 @@
             "resources"
           ],
           "properties": {
-            "enabled": {"type": "boolean"},
-            "replicaCount": {"type": "integer", "minimum": 1, "maximum": 64},
-            "listenPort": {"type": "integer", "minimum": 1024, "maximum": 65535},
-            "image": {"$ref": "#/$defs/containerImage"},
+            "enabled": {
+              "type": "boolean"
+            },
+            "replicaCount": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "listenPort": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 65535
+            },
+            "image": {
+              "$ref": "#/$defs/containerImage"
+            },
             "prometheusUrl": {
               "type": "string",
               "pattern": "^http://"
             },
-            "existingSecret": {"type": "string", "minLength": 1, "maxLength": 253},
+            "existingSecret": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253
+            },
             "secretKeys": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["databaseUrl", "adminUser", "adminPassword", "secretKey"],
+              "required": [
+                "databaseUrl",
+                "adminUser",
+                "adminPassword",
+                "secretKey"
+              ],
               "properties": {
-                "databaseUrl": {"type": "string", "minLength": 1, "maxLength": 253},
-                "adminUser": {"type": "string", "minLength": 1, "maxLength": 253},
-                "adminPassword": {"type": "string", "minLength": 1, "maxLength": 253},
-                "secretKey": {"type": "string", "minLength": 1, "maxLength": 253}
+                "databaseUrl": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 253
+                },
+                "adminUser": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 253
+                },
+                "adminPassword": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 253
+                },
+                "secretKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 253
+                }
               }
             },
-            "anonymousViewerEnabled": {"type": "boolean"},
+            "anonymousViewerEnabled": {
+              "type": "boolean"
+            },
             "service": {
               "type": "object",
               "additionalProperties": false,
@@ -698,33 +1044,65 @@
                 "loadBalancerSourceRanges"
               ],
               "properties": {
-                "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
-                "type": {"type": "string", "enum": ["ClusterIP", "LoadBalancer"]},
-                "loadBalancerClass": {"type": "string", "maxLength": 253},
-                "ingressReplicas": {"type": "integer", "minimum": 1, "maximum": 64},
+                "port": {
+                  "type": "integer",
+                  "minimum": 1024,
+                  "maximum": 65535
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "ClusterIP",
+                    "LoadBalancer"
+                  ]
+                },
+                "loadBalancerClass": {
+                  "type": "string",
+                  "maxLength": 253
+                },
+                "ingressReplicas": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 64
+                },
                 "loadBalancerSourceRanges": {
                   "type": "array",
                   "uniqueItems": true,
-                  "items": {"type": "string", "minLength": 3, "maxLength": 49}
+                  "items": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 49
+                  }
                 }
               }
             },
             "vpnAccess": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["enabled", "sourceCidrs"],
+              "required": [
+                "enabled",
+                "sourceCidrs"
+              ],
               "properties": {
-                "enabled": {"type": "boolean"},
+                "enabled": {
+                  "type": "boolean"
+                },
                 "sourceCidrs": {
                   "type": "array",
                   "uniqueItems": true,
-                  "items": {"type": "string", "minLength": 3, "maxLength": 49}
+                  "items": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 49
+                  }
                 }
               }
             },
             "nodeSelector": {
               "type": "object",
-              "additionalProperties": {"type": "string"}
+              "additionalProperties": {
+                "type": "string"
+              }
             },
             "allowedNodes": {
               "type": "array",
@@ -737,18 +1115,57 @@
             },
             "tolerations": {
               "type": "array",
-              "items": {"type": "object"}
+              "items": {
+                "type": "object"
+              }
             },
             "podDisruptionBudget": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["enabled", "minAvailable"],
+              "required": [
+                "enabled",
+                "minAvailable"
+              ],
               "properties": {
-                "enabled": {"type": "boolean"},
-                "minAvailable": {"type": "integer", "minimum": 1, "maximum": 64}
+                "enabled": {
+                  "type": "boolean"
+                },
+                "minAvailable": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 64
+                }
               }
             },
-            "resources": {"type": "object"}
+            "resources": {
+              "type": "object"
+            }
+          }
+        },
+        "securityInventory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "targets",
+            "maxAgeSeconds"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "targets": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9.\\[\\]:_-]+:[0-9]{1,5}$"
+              }
+            },
+            "maxAgeSeconds": {
+              "type": "integer",
+              "minimum": 900,
+              "maximum": 86400
+            }
           }
         }
       }
@@ -756,8 +1173,12 @@
     "secrets": {
       "type": "object",
       "properties": {
-        "existingSecret": {"type": "string"},
-        "create": {"type": "boolean"}
+        "existingSecret": {
+          "type": "string"
+        },
+        "create": {
+          "type": "boolean"
+        }
       }
     }
   },
@@ -765,12 +1186,33 @@
     "containerImage": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["repository", "tag", "digest", "pullPolicy"],
+      "required": [
+        "repository",
+        "tag",
+        "digest",
+        "pullPolicy"
+      ],
       "properties": {
-        "repository": {"type": "string", "minLength": 1},
-        "tag": {"type": "string", "minLength": 1},
-        "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
-        "pullPolicy": {"type": "string", "enum": ["Always", "IfNotPresent", "Never"]}
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        }
       }
     }
   }

@@ -97,6 +97,15 @@ data:
     rule_files:
       - /etc/prometheus/rules.yml
     scrape_configs:
+      {{- if .Values.monitoring.securityInventory.enabled }}
+      {{- if empty .Values.monitoring.securityInventory.targets }}
+      {{- fail "monitoring.securityInventory.targets is required when security inventory is enabled" }}
+      {{- end }}
+      - job_name: heterocloud-security
+        static_configs:
+          - targets: {{ .Values.monitoring.securityInventory.targets | toJson }}
+        scrape_timeout: 5s
+      {{- end }}
       {{- if .Values.monitoring.resourceExporter.enabled }}
       - job_name: heterocloud-resources
         kubernetes_sd_configs:
@@ -291,6 +300,38 @@ data:
             regex: turn_traffic_.*
   rules.yml: |
     groups:
+      {{- if .Values.monitoring.securityInventory.enabled }}
+      - name: heterocloud-security
+        rules:
+          - alert: HeteroCloudSecurityInventoryUnavailable
+            expr: absent(up{job="heterocloud-security"}) or up{job="heterocloud-security"} == 0
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: OSS vulnerability inventory is unavailable
+          - alert: HeteroCloudSecurityInventoryIncomplete
+            expr: heterocloud_security_scan_complete == 0 or heterocloud_security_scan_age_seconds > {{ .Values.monitoring.securityInventory.maxAgeSeconds }}
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: OSS inventory contains unverified targets or stale results
+          - alert: HeteroCloudCriticalVulnerabilityUnresolved
+            expr: heterocloud_security_findings{severity="CRITICAL"} > 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: Critical OSS vulnerabilities require remediation
+          - alert: HeteroCloudRuntimeBinaryDrift
+            expr: heterocloud_security_runtime_drift_processes > 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: Running processes still use a superseded runtime binary
+      {{- end }}
       - name: heterocloud-flow-capacity
         interval: {{ $prometheus.evaluationInterval }}
         rules:
