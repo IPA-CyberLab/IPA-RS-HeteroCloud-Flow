@@ -162,6 +162,42 @@ class ResourceTests(unittest.TestCase):
         with patch.object(e, 'kget', side_effect=pages), self.assertRaises(ValueError):
             e.storage_inventory()
 
+    def test_attached_volume_replica_count_requires_one_running_engine(self):
+        volumes = [
+            {'metadata': {'name': 'single'}, 'status': {'state': 'attached', 'robustness': 'degraded'}},
+            {'metadata': {'name': 'pair'}, 'status': {'state': 'attached', 'robustness': 'healthy'}},
+            {'metadata': {'name': 'ambiguous'}, 'status': {'state': 'attached', 'robustness': 'degraded'}},
+            {'metadata': {'name': 'missing'}, 'status': {'state': 'attached', 'robustness': 'degraded'}},
+            {'metadata': {'name': 'detached'}, 'status': {'state': 'detached', 'robustness': 'unknown'}},
+        ]
+        def engine(name, volume, modes, state='running'):
+            return {'metadata': {'name': name}, 'spec': {'volumeName': volume},
+                    'status': {'currentState': state, 'replicaModeMap': modes}}
+        engines = [engine('one', 'single', {'good': 'RW', 'rebuilding': 'WO'}),
+                   engine('two', 'pair', {'a': 'RW', 'b': 'RW'}),
+                   engine('ambig-a', 'ambiguous', {'a': 'RW'}),
+                   engine('ambig-b', 'ambiguous', {'b': 'RW'}),
+                   engine('stopped', 'missing', {'a': 'RW'}, 'stopped')]
+        result = e.aggregate(*sample(), storage_enabled=True, storage_volumes=volumes, storage_engines=engines)
+        self.assertEqual(values(result, 'heterocloud_storage_replica_inventory_success'), [1])
+        self.assertIn('heterocloud_storage_volume_readwrite_replicas{volume="single"} 1', result)
+        self.assertIn('heterocloud_storage_volume_readwrite_replicas{volume="pair"} 2', result)
+        self.assertIn('heterocloud_storage_volume_replica_observation_available{volume="ambiguous"} 0', result)
+        self.assertIn('heterocloud_storage_volume_replica_observation_available{volume="missing"} 0', result)
+        self.assertNotIn('heterocloud_storage_volume_readwrite_replicas{volume="ambiguous"}', result)
+        self.assertNotIn('heterocloud_storage_volume_replica_observation_available{volume="detached"}', result)
+
+        unavailable = e.aggregate(*sample(), storage_enabled=True, storage_volumes=volumes, storage_engines=None)
+        self.assertEqual(values(unavailable, 'heterocloud_storage_replica_inventory_success'), [0])
+        self.assertNotIn('heterocloud_storage_volume_readwrite_replicas', unavailable)
+
+    def test_storage_engine_inventory_is_namespace_scoped_and_resource_is_allowlisted(self):
+        with patch.object(e, 'kget', return_value={'items': [], 'metadata': {}}) as request:
+            self.assertEqual(e.storage_inventory('engines'), [])
+        self.assertIn('/namespaces/longhorn-system/engines?', request.call_args.args[0])
+        with self.assertRaises(ValueError):
+            e.storage_inventory('secrets')
+
 
 if __name__ == '__main__':
     unittest.main()

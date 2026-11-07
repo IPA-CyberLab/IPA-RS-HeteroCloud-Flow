@@ -247,6 +247,27 @@ data:
               severity: warning
             annotations:
               summary: A storage volume has lost replica redundancy
+          - alert: HeteroCloudStorageReplicaInventoryUnavailable
+            expr: absent(heterocloud_storage_replica_inventory_success) or max(heterocloud_storage_replica_inventory_success) == 0
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: Storage replica health could not be collected
+          - alert: HeteroCloudVolumeReplicaObservationUnavailable
+            expr: max by (volume) (heterocloud_storage_volume_replica_observation_available) == 0
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: An attached volume has no unambiguous replica observation
+          - alert: HeteroCloudVolumeSingleReadWriteReplica
+            expr: max by (volume) (heterocloud_storage_volume_readwrite_replicas) <= 1
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: An attached volume has at most one read-write replica
           - alert: HeteroCloudVolumeFaulted
             expr: max by (volume) (heterocloud_storage_volume_robustness{state="faulted"} == 1)
             for: 1m

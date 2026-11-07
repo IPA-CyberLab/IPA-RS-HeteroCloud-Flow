@@ -102,7 +102,8 @@ def workload_pool_node(node):
                                      for t in node.get('spec', {}).get('taints', []))
 
 
-def aggregate(rows, nodes, pods, claims, summaries, now=None, *, storage_enabled=False, storage_volumes=None):
+def aggregate(rows, nodes, pods, claims, summaries, now=None, *, storage_enabled=False, storage_volumes=None,
+              storage_engines=None):
     """Build a fresh snapshot: deleted objects and failed measurements disappear."""
     now = time.time() if now is None else now
     metrics = Metrics()
@@ -203,6 +204,12 @@ def aggregate(rows, nodes, pods, claims, summaries, now=None, *, storage_enabled
             metrics.add('heterocloud_service_resource_available', {**labels, 'resource': resource}, available)
     if storage_enabled:
         metrics.add('heterocloud_storage_inventory_success', {}, storage_volumes is not None)
+        metrics.add('heterocloud_storage_replica_inventory_success', {}, storage_engines is not None)
+        engines_by_volume = defaultdict(list)
+        for engine in storage_engines or []:
+            metadata, spec, status = engine.get('metadata', {}), engine.get('spec', {}), engine.get('status', {})
+            if not metadata.get('deletionTimestamp') and status.get('currentState') == 'running':
+                engines_by_volume[spec.get('volumeName')].append(engine)
         for volume in storage_volumes or []:
             metadata = volume['metadata']
             if metadata.get('deletionTimestamp'):
@@ -212,6 +219,16 @@ def aggregate(rows, nodes, pods, claims, summaries, now=None, *, storage_enabled
                 state = 'unknown'
             metrics.add('heterocloud_storage_volume_robustness',
                         {'volume': metadata['name'], 'state': state}, 1)
+            if volume.get('status', {}).get('state') == 'attached':
+                engines = engines_by_volume.get(metadata['name'], [])
+                mode_map = engines[0].get('status', {}).get('replicaModeMap') if len(engines) == 1 else None
+                available = (storage_engines is not None and isinstance(mode_map, dict) and
+                             all(isinstance(mode, str) for mode in mode_map.values()))
+                metrics.add('heterocloud_storage_volume_replica_observation_available',
+                            {'volume': metadata['name']}, available)
+                if available:
+                    metrics.add('heterocloud_storage_volume_readwrite_replicas',
+                                {'volume': metadata['name']}, sum(mode == 'RW' for mode in mode_map.values()))
     metrics.add('heterocloud_resource_snapshot_timestamp_seconds', {}, now)
     return metrics.render()
 
@@ -231,11 +248,13 @@ def inventory():
         return connection.execute('SELECT * FROM monitoring.resource_services').fetchall()
 
 
-def storage_inventory():
-    """List all volumes without turning a failed or truncated list into health."""
+def storage_inventory(resource='volumes'):
+    """List all storage objects without treating a failed or truncated list as health."""
+    if resource not in ('volumes', 'engines'):
+        raise ValueError('Invalid storage resource')
     if not re.fullmatch(r'[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?', STORAGE_NAMESPACE):
         raise ValueError('Invalid storage namespace')
-    base = '/apis/longhorn.io/v1beta2/namespaces/' + STORAGE_NAMESPACE + '/volumes'
+    base = '/apis/longhorn.io/v1beta2/namespaces/' + STORAGE_NAMESPACE + '/' + resource
     items, continuation, seen = [], '', set()
     for _ in range(40):
         query = {'limit': '500'}
@@ -247,7 +266,7 @@ def storage_inventory():
         for volume in page['items']:
             name = volume.get('metadata', {}).get('name')
             if not isinstance(name, str) or not name or name in seen:
-                raise ValueError('Invalid or duplicated storage volume')
+                raise ValueError('Invalid or duplicated storage object')
             seen.add(name)
             items.append(volume)
         continuation = page.get('metadata', {}).get('continue', '')
@@ -263,7 +282,7 @@ def collect():
     nodes = kget('/api/v1/nodes')['items']
     pods = kget('/api/v1/namespaces/' + NAMESPACE + '/pods')['items']
     claims = kget('/api/v1/namespaces/' + NAMESPACE + '/persistentvolumeclaims')['items']
-    storage_volumes = None
+    storage_volumes, storage_engines = None, None
     if STORAGE_HEALTH_ENABLED:
         try:
             storage_volumes = storage_inventory()
@@ -271,6 +290,10 @@ def collect():
             # Keep resource metrics available, but never report a failed list
             # as an empty or healthy storage inventory.
             logging.warning('Storage health inventory unavailable')
+        try:
+            storage_engines = storage_inventory('engines')
+        except Exception:
+            logging.warning('Storage replica inventory unavailable')
     summaries = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(kget, '/api/v1/nodes/' + n['metadata']['name'] + '/proxy/stats/summary'): n['metadata']['name'] for n in nodes}
@@ -281,7 +304,8 @@ def collect():
             except Exception:
                 logging.warning('Node resource sample unavailable: %s', name)
     return aggregate(rows, nodes, pods, claims, summaries,
-                     storage_enabled=STORAGE_HEALTH_ENABLED, storage_volumes=storage_volumes)
+                     storage_enabled=STORAGE_HEALTH_ENABLED, storage_volumes=storage_volumes,
+                     storage_engines=storage_engines)
 
 
 class Snapshot:

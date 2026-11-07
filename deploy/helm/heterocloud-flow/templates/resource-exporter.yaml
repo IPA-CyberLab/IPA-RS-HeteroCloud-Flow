@@ -41,7 +41,7 @@ metadata:
   namespace: {{ $cfg.storageHealth.namespace }}
 rules:
   - apiGroups: ["longhorn.io"]
-    resources: [volumes]
+    resources: [volumes, engines]
     verbs: [list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

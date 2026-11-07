@@ -83,7 +83,7 @@ class DashboardTests(unittest.TestCase):
                     and o['metadata']['name'].endswith('-resources-storage-health'))
         self.assertEqual(role['metadata']['namespace'], 'longhorn-system')
         self.assertEqual(role['rules'], [{'apiGroups': ['longhorn.io'],
-                                         'resources': ['volumes'], 'verbs': ['list']}])
+                                         'resources': ['volumes', 'engines'], 'verbs': ['list']}])
         config = next(o for o in objects if o['kind'] == 'ConfigMap'
                       and o['metadata']['name'].endswith('-prometheus'))
         groups = yaml.safe_load(config['data']['rules.yml'])['groups']
@@ -91,6 +91,8 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('heterocloud_storage_inventory_success', rules['HeteroCloudStorageInventoryUnavailable']['expr'])
         self.assertIn('state="degraded"', rules['HeteroCloudVolumeDegraded']['expr'])
         self.assertIn('state="faulted"', rules['HeteroCloudVolumeFaulted']['expr'])
+        self.assertEqual(rules['HeteroCloudVolumeSingleReadWriteReplica']['labels']['severity'], 'critical')
+        self.assertIn('heterocloud_storage_volume_readwrite_replicas', rules['HeteroCloudVolumeSingleReadWriteReplica']['expr'])
 
     def test_legacy_dashboard_preserved(self):
         self.assertEqual(len(self.dashboards['heterocloud-flow.json']['panels']), 13)
