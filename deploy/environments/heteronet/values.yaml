@@ -154,14 +154,12 @@ livekit:
       memory: 4Gi
 
 coturn:
-  # Only the two application workers are eligible; the control-plane hosts
-  # remain isolated. Each pool has one instance on each worker.
-  replicaCount: 2
+  replicaCount: 4
   relayPortMin: 49152
   relayPortMax: 57343
   additionalPools:
     - name: secondary
-      replicaCount: 2
+      replicaCount: 4
       servicePort: 3479
       relayPortMin: 57344
       relayPortMax: 65535
@@ -170,16 +168,24 @@ coturn:
   publicHosts:
     - flow.heterocloud.mizuame.app
   relayAddress:
-    # The second TURN address is separate from shared HTTPS DNS. The latter
-    # must only contain nodes that can serve HTTP as well as TURN.
+    # Keep TURN on the same public nodes that terminate flow HTTPS. This makes
+    # every address in the unified flow DNS RRset valid for HTTP, WSS and TURN.
+    # These addresses are assigned directly to the selected hosts. Bind relay
+    # sockets to them so media does not make an avoidable VPN round trip.
     mode: direct-public
     mappings:
+      - nodeName: uc-k8sp1
+        publicIp: 163.220.236.51
+        privateIp: 10.250.0.4
+      - nodeName: uc-k8sp2
+        publicIp: 163.220.236.52
+        privateIp: 10.250.0.5
+      - nodeName: uc-k8s3p
+        publicIp: 163.220.236.53
+        privateIp: 10.250.0.6
       - nodeName: ichikawap1
         publicIp: 163.220.236.61
         privateIp: 10.250.0.10
-      - nodeName: uc-k8sp5
-        publicIp: 163.220.236.45
-        privateIp: 10.250.0.2
   metrics:
     # Discover every ready replica; never pin deleted nodes or Pod IPs.
     discovery: true
@@ -191,10 +197,9 @@ coturn:
     limits:
       memory: 1Gi
   annotations:
-    # Shared DNS publishes only the HTTPS-capable ingress. TURN-only hosts
-    # are advertised separately after they pass an external relay check.
-    networking.heteronetwork.io/ingress-replicas: "1"
-  nodeSelector: {}
+    networking.heteronetwork.io/ingress-replicas: "4"
+  nodeSelector:
+    networking.heteronetwork.io/public-ingress: "true"
 
 monitoring:
   securityInventory:
