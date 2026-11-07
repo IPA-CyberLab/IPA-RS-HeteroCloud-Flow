@@ -177,6 +177,10 @@ coturn:
   realm: heterocloud-flow
   publicHosts:
     - flow.heterocloud.mizuame.app
+  # Verified externally for TURN only. Do not add this address to the shared
+  # flow hostname: this node cannot currently terminate the HTTPS endpoint.
+  additionalPublicHosts:
+    - 163.220.236.45
   relayAddress:
     # HTTPS DNS includes only HTTPS-capable ingress. TURN-only addresses are
     # advertised independently, after an external relay check.

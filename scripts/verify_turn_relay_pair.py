@@ -29,6 +29,7 @@ class Receiver(asyncio.DatagramProtocol):
 
 async def verify_one(hosts, port, protocol, username, password):
     opened = []
+    stage = "allocation"
     try:
         for host in hosts:
             endpoint, receiver = await asyncio.wait_for(
@@ -46,9 +47,16 @@ async def verify_one(hosts, port, protocol, username, password):
         markers = [secrets.token_bytes(24), secrets.token_bytes(24)]
         # A channel binding also creates the TURN permission. Repeated sends
         # allow both sides time to bind before validating data in both directions.
+        # aioice's public sendto schedules a task without exposing its errors;
+        # await the pinned aioice protocol so a failed channel bind cannot pass
+        # silently and no sends remain in flight during cleanup.
+        clients = [getattr(endpoint, "_TurnTransport__inner_protocol") for endpoint, _ in opened]
+        stage = "channel_bind_and_send"
         for _ in range(5):
-            for i in range(2):
-                opened[i][0].sendto(markers[i], addresses[1 - i])
+            await asyncio.wait_for(
+                asyncio.gather(*(clients[i].send_data(markers[i], addresses[1 - i]) for i in range(2))),
+                timeout=12,
+            )
             await asyncio.sleep(0.4)
 
         async def receive_expected(receiver, marker):
@@ -57,6 +65,7 @@ async def verify_one(hosts, port, protocol, username, password):
                 if data == marker:
                     return
 
+        stage = "receive"
         await asyncio.wait_for(
             asyncio.gather(
                 receive_expected(opened[0][1], markers[1]),
@@ -65,12 +74,17 @@ async def verify_one(hosts, port, protocol, username, password):
             timeout=10,
         )
         print(json.dumps({"port": port, "transport": protocol, "bidirectional": True}), flush=True)
+    except Exception as exc:
+        print(json.dumps({"port": port, "transport": protocol, "stage": stage,
+                          "error": type(exc).__name__}), file=sys.stderr, flush=True)
+        raise
     finally:
         for endpoint, _ in opened:
-            endpoint.close()
-        # Allow deletion requests to be sent before closing the event loop.
-        if opened:
-            await asyncio.sleep(0.5)
+            client = getattr(endpoint, "_TurnTransport__inner_protocol")
+            try:
+                await asyncio.wait_for(client.delete(), timeout=5)
+            except Exception:
+                client.transport.close()
 
 
 async def main():
@@ -78,6 +92,7 @@ async def main():
     parser.add_argument("host_a", help="first relay IPv4 address")
     parser.add_argument("host_b", help="second relay IPv4 address")
     parser.add_argument("--ports", type=int, nargs="+", default=[3478, 3479])
+    parser.add_argument("--transports", choices=("udp", "tcp"), nargs="+", default=["udp", "tcp"])
     args = parser.parse_args()
     secret = sys.stdin.buffer.read()
     if len(secret) < 32:
@@ -86,7 +101,7 @@ async def main():
     password = base64.b64encode(hmac.new(secret, username.encode(), hashlib.sha1).digest()).decode()
     del secret
     for port in args.ports:
-        for protocol in ("udp", "tcp"):
+        for protocol in args.transports:
             await verify_one((args.host_a, args.host_b), port, protocol, username, password)
 
 
