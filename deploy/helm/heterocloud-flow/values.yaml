@@ -263,6 +263,8 @@ monitoring:
   resourceExporter:
     enabled: false
     replicaCount: 2
+    # Enable only when enough independent monitoring nodes exist.
+    strictNodeSeparation: false
     image: ""
     workloadNamespace: heterocloud-flash-workloads
     storageHealth:

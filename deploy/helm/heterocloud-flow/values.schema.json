@@ -688,6 +688,9 @@
               "minimum": 1,
               "maximum": 3
             },
+            "strictNodeSeparation": {
+              "type": "boolean"
+            },
             "image": {
               "type": "string"
             },

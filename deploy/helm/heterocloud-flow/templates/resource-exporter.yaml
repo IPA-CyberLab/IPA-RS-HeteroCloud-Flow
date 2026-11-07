@@ -1,6 +1,9 @@
 {{- if .Values.monitoring.resourceExporter.enabled }}
 {{- $cfg := .Values.monitoring.resourceExporter }}
 {{- $name := printf "%s-resources" (include "flow.fullname" .) }}
+{{- if and $cfg.strictNodeSeparation (lt (int $cfg.replicaCount) 2) }}
+{{- fail "resourceExporter.strictNodeSeparation requires at least two replicas" }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -92,6 +95,13 @@ metadata:
     app.kubernetes.io/component: resources
 spec:
   replicas: {{ $cfg.replicaCount }}
+  {{- if $cfg.strictNodeSeparation }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  {{- end }}
   selector:
     matchLabels:
       {{- include "flow.selectorLabels" . | nindent 6 }}
@@ -119,8 +129,27 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if $cfg.strictNodeSeparation }}
+      tolerations:
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 30
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 30
+      {{- end }}
       affinity:
         podAntiAffinity:
+          {{- if $cfg.strictNodeSeparation }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "flow.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: resources
+          {{- else }}
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               podAffinityTerm:
@@ -129,6 +158,7 @@ spec:
                   matchLabels:
                     {{- include "flow.selectorLabels" . | nindent 20 }}
                     app.kubernetes.io/component: resources
+          {{- end }}
       containers:
         - name: resources
           image: {{ required "resourceExporter.image is required" $cfg.image | quote }}

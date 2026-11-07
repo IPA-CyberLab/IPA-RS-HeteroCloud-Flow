@@ -214,6 +214,7 @@ monitoring:
     maxAgeSeconds: 3600
   resourceExporter:
     enabled: true
+    strictNodeSeparation: true
     image: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-flow-resource-exporter:31143415e1e905c8d6ef5cfffa1d9bdf4e2c9a14@sha256:9ad2cd19e7962bb9962f54991f97e4c234470dedb13fd63d77b6756d2c202bde
     nodeSelector:
       monitoring.heteronetwork.io/ha: "true"

@@ -71,6 +71,29 @@ class DashboardTests(unittest.TestCase):
                     self.assertNotIn('secrets', rule['resources'])
                     self.assertNotIn('pods/exec', rule['resources'])
 
+    def test_collector_redundancy_does_not_colocate_after_recovery(self):
+        deployment = next(o for o in self.objects if o['kind'] == 'Deployment' and o['metadata']['name'].endswith('-resources'))
+        spec = deployment['spec']
+        self.assertEqual(spec['strategy']['rollingUpdate'], {'maxUnavailable': 1, 'maxSurge': 1})
+        pod = spec['template']['spec']
+        anti_affinity = pod['affinity']['podAntiAffinity']['requiredDuringSchedulingIgnoredDuringExecution']
+        self.assertEqual(anti_affinity[0]['topologyKey'], 'kubernetes.io/hostname')
+        self.assertEqual(anti_affinity[0]['labelSelector']['matchLabels']['app.kubernetes.io/component'], 'resources')
+        for key in ('node.kubernetes.io/not-ready', 'node.kubernetes.io/unreachable'):
+            toleration = next(t for t in pod['tolerations'] if t['key'] == key and t['effect'] == 'NoExecute')
+            self.assertEqual(toleration['tolerationSeconds'], 30)
+
+        command = ['helm', 'template', 'heterocloud-flow', str(CHART), '-n', 'heterocloud-flow',
+                   '-f', str(ROOT / 'deploy/environments/heteronet/values.yaml')]
+        flexible = subprocess.check_output(command + ['--set', 'monitoring.resourceExporter.strictNodeSeparation=false'], text=True)
+        objects = [o for o in yaml.safe_load_all(flexible) if o]
+        alternate = next(o for o in objects if o['kind'] == 'Deployment' and o['metadata']['name'].endswith('-resources'))
+        self.assertIn('preferredDuringSchedulingIgnoredDuringExecution',
+                      alternate['spec']['template']['spec']['affinity']['podAntiAffinity'])
+        invalid = subprocess.run(command + ['--set', 'monitoring.resourceExporter.replicaCount=1'], capture_output=True, text=True)
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertIn('strictNodeSeparation requires at least two replicas', invalid.stderr)
+
     def test_storage_health_is_opt_in_read_only_and_alerts_on_failed_inventory(self):
         roles = [o for o in self.objects if o['kind'] == 'Role'
                  and o['metadata']['name'].endswith('-resources-storage-health')]
