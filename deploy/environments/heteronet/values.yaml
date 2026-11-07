@@ -154,12 +154,14 @@ livekit:
       memory: 4Gi
 
 coturn:
-  replicaCount: 4
+  # The three dedicated control-plane members never run application pods.
+  replicaCount: 2
+  placementClass: turn
   relayPortMin: 49152
   relayPortMax: 57343
   additionalPools:
     - name: secondary
-      replicaCount: 4
+      replicaCount: 2
       servicePort: 3479
       relayPortMin: 57344
       relayPortMax: 65535
@@ -168,24 +170,16 @@ coturn:
   publicHosts:
     - flow.heterocloud.mizuame.app
   relayAddress:
-    # Keep TURN on the same public nodes that terminate flow HTTPS. This makes
-    # every address in the unified flow DNS RRset valid for HTTP, WSS and TURN.
-    # These addresses are assigned directly to the selected hosts. Bind relay
-    # sockets to them so media does not make an avoidable VPN round trip.
+    # HTTPS DNS includes only HTTPS-capable ingress. TURN-only addresses are
+    # advertised independently, after an external relay check.
     mode: direct-public
     mappings:
-      - nodeName: uc-k8sp1
-        publicIp: 163.220.236.51
-        privateIp: 10.250.0.4
-      - nodeName: uc-k8sp2
-        publicIp: 163.220.236.52
-        privateIp: 10.250.0.5
-      - nodeName: uc-k8s3p
-        publicIp: 163.220.236.53
-        privateIp: 10.250.0.6
       - nodeName: ichikawap1
         publicIp: 163.220.236.61
         privateIp: 10.250.0.10
+      - nodeName: uc-k8sp5
+        publicIp: 163.220.236.45
+        privateIp: 10.250.0.2
   metrics:
     # Discover every ready replica; never pin deleted nodes or Pod IPs.
     discovery: true
@@ -197,9 +191,9 @@ coturn:
     limits:
       memory: 1Gi
   annotations:
-    networking.heteronetwork.io/ingress-replicas: "4"
-  nodeSelector:
-    networking.heteronetwork.io/public-ingress: "true"
+    # This service publishes only the shared HTTPS-capable DNS ingress.
+    networking.heteronetwork.io/ingress-replicas: "1"
+  nodeSelector: {}
 
 monitoring:
   securityInventory:
