@@ -392,7 +392,7 @@ data:
             annotations:
               summary: TURN relay allocation capacity is above 80 percent
           - alert: FlowMetricsTargetMissing
-            expr: count(up{job="flow-coturn"} == 1) < {{ $coturnReplicas }} or count(up{job="flow-livekit"} == 1) < {{ .Values.livekit.replicaCount }}
+            expr: (count(up{job="flow-coturn"} == 1) or vector(0)) < {{ $coturnReplicas }} or (count(up{job="flow-livekit"} == 1) or vector(0)) < {{ .Values.livekit.replicaCount }}
             for: 2m
             labels:
               severity: warning
