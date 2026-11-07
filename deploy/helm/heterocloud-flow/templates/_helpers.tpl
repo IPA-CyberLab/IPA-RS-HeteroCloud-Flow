@@ -190,7 +190,7 @@ nodeAffinity:
 {{- define "flow.turnUrls" -}}
 {{- $root := . -}}
 {{- $urls := list -}}
-{{- range $host := .Values.coturn.publicHosts -}}
+{{- range $host := uniq (concat .Values.coturn.publicHosts (.Values.coturn.additionalPublicHosts | default list)) -}}
 {{- $urls = append $urls (printf "turn:%s:%v?transport=udp" $host $root.Values.coturn.servicePort) -}}
 {{- $urls = append $urls (printf "turn:%s:%v?transport=tcp" $host $root.Values.coturn.servicePort) -}}
 {{- range $pool := $root.Values.coturn.additionalPools -}}

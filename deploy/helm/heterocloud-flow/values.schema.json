@@ -433,7 +433,7 @@
       "properties": {
         "replicaCount": {
           "type": "integer",
-          "minimum": 3
+          "minimum": 2
         },
         "additionalPools": {
           "type": "array",
@@ -487,6 +487,16 @@
         "publicHosts": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9.-]+$"
+          }
+        },
+        "additionalPublicHosts": {
+          "type": "array",
           "maxItems": 16,
           "uniqueItems": true,
           "items": {

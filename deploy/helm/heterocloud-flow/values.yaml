@@ -173,6 +173,9 @@ coturn:
     - turn-a.example.com
     - turn-b.example.com
     - turn-c.example.com
+  # Additional TURN-only addresses are advertised to clients but never added
+  # to the shared public DNS record used by HTTPS and signaling.
+  additionalPublicHosts: []
   relayAddress:
     # host: let coturn select a local relay address without mappings.
     # direct-public: bind the mapped publicIp that is local to the host.

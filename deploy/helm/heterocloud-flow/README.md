@@ -229,6 +229,12 @@ example, public UDP port `49162` must reach private UDP port `49162` on the
 mapped node. This NAT requirement applies only to `one-to-one-nat`; in
 `direct-public`, open the relay range on the directly assigned public address.
 
+When an additional node serves TURN but cannot serve the shared HTTPS endpoint,
+put its tested IP address or hostname in `coturn.additionalPublicHosts`. These
+addresses are included in TURN credentials and LiveKit ICE configuration, but
+not in the Kubernetes Service's external-dns hostname annotation. Provision
+and externally verify its TURN listener and relay ports before advertising it.
+
 ## External Redis
 
 To use an existing Sentinel deployment:

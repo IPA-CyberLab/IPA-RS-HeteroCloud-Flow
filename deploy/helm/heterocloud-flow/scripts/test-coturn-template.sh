@@ -230,6 +230,28 @@ helm template flow "${chart_dir}" \
 assert_contains 'turn:turn-a.example.test:3479?transport=udp' "${tmp_dir}/api-pools.yaml"
 assert_contains 'turn:turn-a.example.test:3479?transport=tcp' "${tmp_dir}/api-pools.yaml"
 
+# A TURN-only address must reach clients without entering the shared HTTPS DNS
+# record. A host present in both lists must be advertised only once.
+additional_hosts='["192.0.2.45","turn-a.example.test"]'
+helm template flow "${chart_dir}" -f "${test_values}" \
+  --set-json "coturn.additionalPublicHosts=${additional_hosts}" \
+  --set-json 'coturn.additionalPools=[{"name":"secondary","replicaCount":3,"servicePort":3479,"relayPortMin":50000,"relayPortMax":50100,"metricsPort":9642}]' \
+  >"${tmp_dir}/additional-hosts.yaml"
+assert_contains 'turn:192.0.2.45:3478?transport=udp' "${tmp_dir}/additional-hosts.yaml"
+assert_contains 'turn:192.0.2.45:3479?transport=tcp' "${tmp_dir}/additional-hosts.yaml"
+assert_contains '"192.0.2.45:3478"' "${tmp_dir}/additional-hosts.yaml"
+assert_contains 'host: "192.0.2.45"' "${tmp_dir}/additional-hosts.yaml"
+assert_contains 'external-dns.alpha.kubernetes.io/hostname: "turn-a.example.test,turn-b.example.test,turn-c.example.test"' "${tmp_dir}/additional-hosts.yaml"
+assert_not_contains 'external-dns.alpha.kubernetes.io/hostname: "turn-a.example.test,turn-b.example.test,turn-c.example.test,192.0.2.45"' "${tmp_dir}/additional-hosts.yaml"
+helm template flow "${chart_dir}" -f "${test_values}" \
+  --show-only templates/api.yaml \
+  --set-json "coturn.additionalPublicHosts=${additional_hosts}" \
+  >"${tmp_dir}/additional-hosts-api.yaml"
+test "$(grep -o 'turn:turn-a.example.test:3478?transport=udp' "${tmp_dir}/additional-hosts-api.yaml" | wc -l)" -eq 1
+
+render --set coturn.replicaCount=2 >"${tmp_dir}/coturn-two-replicas.yaml"
+assert_contains 'replicas: 2' "${tmp_dir}/coturn-two-replicas.yaml"
+
 # The API scrapes every pool; one unreachable metrics endpoint makes the whole
 # scrape unavailable. Both pod and external/host-network egress must allow each
 # configured metrics port, without opening arbitrary ports.

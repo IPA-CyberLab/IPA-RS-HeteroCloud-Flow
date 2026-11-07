@@ -47,13 +47,18 @@ for component in livekit prometheus grafana; do
   ! grep -q '^      nodeSelector:' "$tmp_dir/${component}.yaml"
 done
 
-test "$(grep -c '^  replicas: 4$' "$tmp_dir/coturn.yaml")" -eq 2
+test "$(grep -c '^  replicas: 2$' "$tmp_dir/coturn.yaml")" -eq 2
 test "$(grep -c '^          nodeTaintsPolicy: Honor$' "$tmp_dir/coturn.yaml")" -eq 2
-grep -q '^      nodeSelector:$' "$tmp_dir/coturn.yaml"
-grep -q 'networking.heteronetwork.io/public-ingress: "true"' "$tmp_dir/coturn.yaml"
+! grep -q '^      nodeSelector:$' "$tmp_dir/coturn.yaml"
+for node in ichikawap1 uc-k8sp5; do
+  test "$(grep -c -- "- \"$node\"" "$tmp_dir/coturn.yaml")" -eq 2
+done
+for node in uc-k8sp1 uc-k8sp2 uc-k8s3p; do
+  ! grep -q -- "- \"$node\"" "$tmp_dir/coturn.yaml"
+done
 
-test "$(grep -c '^  minAvailable: 4$' "$tmp_dir/pdb.yaml")" -eq 5
-! grep -q '^  minAvailable: 2$' "$tmp_dir/pdb.yaml"
+test "$(grep -c '^  minAvailable: 4$' "$tmp_dir/pdb.yaml")" -eq 4
+test "$(grep -c '^  minAvailable: 2$' "$tmp_dir/pdb.yaml")" -eq 1
 
 helm template flow "$chart_dir" -f "$environment_values" \
   --namespace heterocloud-flow >"$tmp_dir/all.yaml"

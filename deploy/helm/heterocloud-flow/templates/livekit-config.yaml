@@ -39,11 +39,12 @@ data:
       allow_tcp_fallback: true
       stun_servers:
       {{- $root := . }}
-      {{- range $host := .Values.coturn.publicHosts }}
+      {{- $turnHosts := uniq (concat .Values.coturn.publicHosts (.Values.coturn.additionalPublicHosts | default list)) }}
+      {{- range $host := $turnHosts }}
         - {{ printf "%s:%d" $host (int $root.Values.coturn.servicePort) | quote }}
       {{- end }}
       turn_servers:
-      {{- range $host := .Values.coturn.publicHosts }}
+      {{- range $host := $turnHosts }}
         - host: {{ $host | quote }}
           port: {{ $root.Values.coturn.servicePort }}
           protocol: udp
