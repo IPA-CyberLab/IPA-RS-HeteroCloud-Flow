@@ -14,8 +14,8 @@ objects = [value for value in yaml.safe_load_all(rendered) if value]
 config = next(value for value in objects if value['kind'] == 'ConfigMap'
               and value['metadata']['name'].endswith('-prometheus'))
 groups = yaml.safe_load(config['data']['rules.yml'])['groups']
-expression = next(rule['expr'] for group in groups for rule in group['rules']
-                  if rule.get('alert') == 'FlowMetricsTargetMissing')
+rules = {rule['alert']: rule['expr'] for group in groups for rule in group['rules'] if 'alert' in rule}
+expression = rules['FlowMetricsTargetMissing']
 
 
 def case(name, coturn, livekit, expected):
@@ -36,4 +36,11 @@ tests = [
     case('all LiveKit targets disappeared', [1] * 4, [], 0),
     case('all media targets disappeared', [], [], 0),
 ]
+for job, alert in [('grafana', 'GrafanaReplicaMissing'), ('prometheus', 'PrometheusReplicaMissing')]:
+    for name, values, expected in [('healthy', [1, 1, 1], None), ('all targets disappeared', [], 0)]:
+        tests.append({'name': f'{job}: {name}', 'interval': '1m', 'input_series': [
+            {'series': f'up{{job="{job}",instance="{index}"}}', 'values': f'{value} {value}'}
+            for index, value in enumerate(values)
+        ], 'promql_expr_test': [{'expr': rules[alert], 'eval_time': '1m',
+            'exp_samples': [] if expected is None else [{'labels': '{}', 'value': expected}]}]})
 yaml.safe_dump({'rule_files': [], 'evaluation_interval': '1m', 'tests': tests}, sys.stdout, sort_keys=False)
