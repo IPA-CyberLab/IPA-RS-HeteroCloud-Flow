@@ -251,6 +251,17 @@ test "$(grep -o 'turn:turn-a.example.test:3478?transport=udp' "${tmp_dir}/additi
 
 render --set coturn.replicaCount=2 >"${tmp_dir}/coturn-two-replicas.yaml"
 assert_contains 'replicas: 2' "${tmp_dir}/coturn-two-replicas.yaml"
+render --set-string coturn.placementClass=turn >"${tmp_dir}/coturn-turn-placement.yaml"
+assert_contains 'networking.heteronetwork.io/direct-placement-class: turn' "${tmp_dir}/coturn-turn-placement.yaml"
+if render --set-string coturn.placementClass=other >"${tmp_dir}/invalid-placement.yaml" 2>&1; then
+  printf 'expected invalid TURN placement class to fail\n' >&2
+  exit 1
+fi
+if render --set-string 'podAnnotations.networking\.heteronetwork\.io/direct-placement-class=turn' \
+  >"${tmp_dir}/override-placement.yaml" 2>&1; then
+  printf 'expected placement class annotation override to fail\n' >&2
+  exit 1
+fi
 
 # The API scrapes every pool; one unreachable metrics endpoint makes the whole
 # scrape unavailable. Both pod and external/host-network egress must allow each

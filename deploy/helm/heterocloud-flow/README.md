@@ -234,6 +234,10 @@ put its tested IP address or hostname in `coturn.additionalPublicHosts`. These
 addresses are included in TURN credentials and LiveKit ICE configuration, but
 not in the Kubernetes Service's external-dns hostname annotation. Provision
 and externally verify its TURN listener and relay ports before advertising it.
+Set `coturn.placementClass: turn` only after deploying an admission controller
+that understands this class and labeling the approved nodes
+`networking.heteronetwork.io/turn-ingress=true`. Existing deployments default
+to the public HTTPS ingress class.
 
 ## External Redis
 

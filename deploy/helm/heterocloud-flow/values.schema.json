@@ -431,6 +431,10 @@
         "metrics"
       ],
       "properties": {
+        "placementClass": {
+          "type": "string",
+          "enum": ["public", "turn"]
+        },
         "replicaCount": {
           "type": "integer",
           "minimum": 2

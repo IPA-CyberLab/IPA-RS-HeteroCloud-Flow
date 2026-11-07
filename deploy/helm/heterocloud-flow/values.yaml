@@ -163,6 +163,9 @@ livekit:
 
 coturn:
   replicaCount: 3
+  # "turn" selects nodes approved for TURN even if they cannot serve HTTPS.
+  # Install a HeteroNetwork admission controller supporting this class first.
+  placementClass: public
   additionalPools: []
   image:
     repository: coturn/coturn

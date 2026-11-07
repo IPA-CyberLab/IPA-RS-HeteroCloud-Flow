@@ -2,6 +2,13 @@
 {{- $relayAddressMode := .Values.coturn.relayAddress.mode -}}
 {{- $relayAddressMappings := .Values.coturn.relayAddress.mappings -}}
 {{- $coturnNodeSelector := mergeOverwrite (deepCopy (.Values.nodeSelector | default dict)) (.Values.coturn.nodeSelector | default dict) -}}
+{{- $coturnAnnotations := deepCopy (.Values.podAnnotations | default dict) -}}
+{{- if hasKey $coturnAnnotations "networking.heteronetwork.io/direct-placement-class" -}}
+{{- fail "podAnnotations must not override the coturn direct placement class" -}}
+{{- end -}}
+{{- if eq (.Values.coturn.placementClass | default "public") "turn" -}}
+{{- $_ := set $coturnAnnotations "networking.heteronetwork.io/direct-placement-class" "turn" -}}
+{{- end -}}
 {{- $relayAddressMappingArgs := list -}}
 {{- $mappingNodeNames := dict -}}
 {{- $mappingPublicIps := dict -}}
@@ -116,7 +123,7 @@ spec:
         app.kubernetes.io/component: coturn
         flow.heterocloud.io/turn-pool: {{ $pool.name }}
         networking.heteronetwork.io/traffic-mode: direct
-      {{- with .Values.podAnnotations }}
+      {{- with $coturnAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
