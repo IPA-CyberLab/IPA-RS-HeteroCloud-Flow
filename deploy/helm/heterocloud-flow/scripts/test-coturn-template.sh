@@ -214,6 +214,11 @@ assert_contains '--listening-port=3479' "${tmp_dir}/coturn-pools.yaml"
 assert_contains '--min-port=50000' "${tmp_dir}/coturn-pools.yaml"
 assert_contains '--max-port=50100' "${tmp_dir}/coturn-pools.yaml"
 assert_contains '--prometheus-port=9642' "${tmp_dir}/coturn-pools.yaml"
+render \
+  --set-json 'coturn.additionalPools=[{"name":"secondary","replicaCount":3,"servicePort":3479,"relayPortMin":50000,"relayPortMax":50100,"metricsPort":9642,"resources":{"requests":{"cpu":"100m","memory":"256Mi"},"limits":{"memory":"1Gi"}}}]' \
+  >"${tmp_dir}/coturn-pool-resources.yaml"
+assert_contains 'cpu: 100m' "${tmp_dir}/coturn-pool-resources.yaml"
+assert_contains 'cpu: 200m' "${tmp_dir}/coturn-pool-resources.yaml"
 selector_pool_deployments=$(awk '
   $0 == "kind: Deployment" { deployment = 1; name = ""; in_selector = 0; next }
   deployment && $1 == "name:" && name == "" { name = $2; next }

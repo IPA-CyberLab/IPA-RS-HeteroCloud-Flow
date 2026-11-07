@@ -228,6 +228,8 @@ mapped public node. The NAT path must preserve relay ports one-to-one; for
 example, public UDP port `49162` must reach private UDP port `49162` on the
 mapped node. This NAT requirement applies only to `one-to-one-nat`; in
 `direct-public`, open the relay range on the directly assigned public address.
+Each additional pool may override `resources`; otherwise it inherits
+`coturn.resources`. Size CPU reservations for expected relay load.
 
 When an additional node serves TURN but cannot serve the shared HTTPS endpoint,
 put its tested IP address or hostname in `coturn.additionalPublicHosts`. These

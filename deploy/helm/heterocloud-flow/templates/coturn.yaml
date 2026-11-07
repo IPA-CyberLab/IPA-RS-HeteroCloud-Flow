@@ -42,6 +42,7 @@
   "relayPortMin" (int .Values.coturn.relayPortMin)
   "relayPortMax" (int .Values.coturn.relayPortMax)
   "metricsPort" (int .Values.coturn.metrics.port)
+  "resources" .Values.coturn.resources
 ) -}}
 {{- range $additionalPool := .Values.coturn.additionalPools -}}
 {{- $coturnPools = append $coturnPools (dict
@@ -52,6 +53,7 @@
   "relayPortMin" (int $additionalPool.relayPortMin)
   "relayPortMax" (int $additionalPool.relayPortMax)
   "metricsPort" (int $additionalPool.metricsPort)
+  "resources" ($additionalPool.resources | default $.Values.coturn.resources)
 ) -}}
 {{- end -}}
 {{- $poolNames := dict -}}
@@ -323,7 +325,7 @@ spec:
             seccompProfile:
               type: RuntimeDefault
           resources:
-            {{- toYaml .Values.coturn.resources | nindent 12 }}
+            {{- toYaml $pool.resources | nindent 12 }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp

@@ -166,6 +166,14 @@ coturn:
       relayPortMin: 57344
       relayPortMax: 65535
       metricsPort: 9642
+      # Retain memory bounds and an uncapped CPU limit while reserving enough
+      # CPU to fit alongside the primary relay on the existing worker.
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          memory: 1Gi
   realm: heterocloud-flow
   publicHosts:
     - flow.heterocloud.mizuame.app
