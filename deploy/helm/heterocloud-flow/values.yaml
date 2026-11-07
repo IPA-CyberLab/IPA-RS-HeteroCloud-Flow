@@ -259,6 +259,9 @@ monitoring:
     replicaCount: 2
     image: ""
     workloadNamespace: heterocloud-flash-workloads
+    storageHealth:
+      enabled: false
+      namespace: longhorn-system
     existingSecret: heterocloud-resource-monitoring
     metricsSourceCidrs: []
     databaseCidrs: []

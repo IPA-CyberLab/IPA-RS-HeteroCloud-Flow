@@ -71,6 +71,27 @@ class DashboardTests(unittest.TestCase):
                     self.assertNotIn('secrets', rule['resources'])
                     self.assertNotIn('pods/exec', rule['resources'])
 
+    def test_storage_health_is_opt_in_read_only_and_alerts_on_failed_inventory(self):
+        roles = [o for o in self.objects if o['kind'] == 'Role'
+                 and o['metadata']['name'].endswith('-resources-storage-health')]
+        self.assertEqual(roles, [])
+        output = subprocess.check_output(['helm', 'template', 'heterocloud-flow', str(CHART),
+            '-n', 'heterocloud-flow', '-f', str(ROOT / 'deploy/environments/heteronet/values.yaml'),
+            '--set', 'monitoring.resourceExporter.storageHealth.enabled=true'], text=True)
+        objects = [o for o in yaml.safe_load_all(output) if o]
+        role = next(o for o in objects if o['kind'] == 'Role'
+                    and o['metadata']['name'].endswith('-resources-storage-health'))
+        self.assertEqual(role['metadata']['namespace'], 'longhorn-system')
+        self.assertEqual(role['rules'], [{'apiGroups': ['longhorn.io'],
+                                         'resources': ['volumes'], 'verbs': ['list']}])
+        config = next(o for o in objects if o['kind'] == 'ConfigMap'
+                      and o['metadata']['name'].endswith('-prometheus'))
+        groups = yaml.safe_load(config['data']['rules.yml'])['groups']
+        rules = {r['alert']: r for group in groups for r in group['rules'] if 'alert' in r}
+        self.assertIn('heterocloud_storage_inventory_success', rules['HeteroCloudStorageInventoryUnavailable']['expr'])
+        self.assertIn('state="degraded"', rules['HeteroCloudVolumeDegraded']['expr'])
+        self.assertIn('state="faulted"', rules['HeteroCloudVolumeFaulted']['expr'])
+
     def test_legacy_dashboard_preserved(self):
         self.assertEqual(len(self.dashboards['heterocloud-flow.json']['panels']), 13)
 

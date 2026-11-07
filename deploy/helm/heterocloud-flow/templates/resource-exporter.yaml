@@ -32,6 +32,32 @@ subjects:
   - kind: ServiceAccount
     name: {{ $name }}
     namespace: {{ .Release.Namespace }}
+{{- if $cfg.storageHealth.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-storage-health
+  namespace: {{ $cfg.storageHealth.namespace }}
+rules:
+  - apiGroups: ["longhorn.io"]
+    resources: [volumes]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-storage-health
+  namespace: {{ $cfg.storageHealth.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-storage-health
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -73,7 +99,11 @@ spec:
   template:
     metadata:
       annotations:
+        {{- if $cfg.storageHealth.enabled }}
         checksum/config: {{ toJson $cfg | sha256sum }}
+        {{- else }}
+        checksum/config: {{ toJson (omit $cfg "storageHealth") | sha256sum }}
+        {{- end }}
       labels:
         {{- include "flow.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: resources
@@ -109,6 +139,12 @@ spec:
           env:
             - name: WORKLOAD_NAMESPACE
               value: {{ $cfg.workloadNamespace | quote }}
+            {{- if $cfg.storageHealth.enabled }}
+            - name: STORAGE_HEALTH_ENABLED
+              value: {{ $cfg.storageHealth.enabled | quote }}
+            - name: STORAGE_NAMESPACE
+              value: {{ $cfg.storageHealth.namespace | quote }}
+            {{- end }}
             - name: COLLECTION_INTERVAL
               value: "30"
             - name: DATABASE_URL

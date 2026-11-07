@@ -300,6 +300,31 @@ data:
             regex: turn_traffic_.*
   rules.yml: |
     groups:
+      {{- if and .Values.monitoring.resourceExporter.enabled .Values.monitoring.resourceExporter.storageHealth.enabled }}
+      - name: heterocloud-storage-health
+        rules:
+          - alert: HeteroCloudStorageInventoryUnavailable
+            expr: absent(heterocloud_storage_inventory_success) or max(heterocloud_storage_inventory_success) == 0
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: Storage volume health could not be collected
+          - alert: HeteroCloudVolumeDegraded
+            expr: max by (volume) (heterocloud_storage_volume_robustness{state="degraded"} == 1)
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: A storage volume has lost replica redundancy
+          - alert: HeteroCloudVolumeFaulted
+            expr: max by (volume) (heterocloud_storage_volume_robustness{state="faulted"} == 1)
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: A storage volume is faulted
+      {{- end }}
       {{- if .Values.monitoring.securityInventory.enabled }}
       - name: heterocloud-security
         rules:
@@ -438,7 +463,11 @@ spec:
         app.kubernetes.io/component: prometheus
       annotations:
         checksum/resource-exporter: {{ toString .Values.monitoring.resourceExporter.enabled | sha256sum }}
+        {{- if .Values.monitoring.resourceExporter.storageHealth.enabled }}
+        checksum/config: {{ printf "%s-%s-%s-%s" (toJson $prometheus) (toJson .Values.monitoring.securityInventory) (toJson .Values.monitoring.resourceExporter.storageHealth) .Chart.Version | sha256sum }}
+        {{- else }}
         checksum/config: {{ printf "%s-%s-%s" (toJson $prometheus) (toJson .Values.monitoring.securityInventory) .Chart.Version | sha256sum }}
+        {{- end }}
     spec:
       {{- if $prometheus.vpnAccess.enabled }}
       hostNetwork: true

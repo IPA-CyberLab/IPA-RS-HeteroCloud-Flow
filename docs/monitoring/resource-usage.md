@@ -22,12 +22,20 @@ The exporter has no Kubernetes write/exec/Secret permission and its SQL account 
 
 ## Verification
 
+When `monitoring.resourceExporter.storageHealth.enabled` is enabled, the
+collector lists Longhorn volumes with a namespace-scoped, read-only role. It
+exports their robustness without workload configuration or credentials and
+marks a failed inventory separately from an empty inventory. Prometheus rules
+identify degraded and faulted volumes and a missing collector. Rules can be
+viewed in Prometheus; they do not themselves configure notification delivery.
+
 ```sh
 python3 -m unittest discover -s monitoring/resource-exporter -v
 python3 -m unittest discover -s monitoring -v  # Helm and PyYAML required
 bash deploy/helm/heterocloud-flow/scripts/test-grafana-template.sh
 bash deploy/helm/heterocloud-flow/scripts/test-prometheus-template.sh  # Docker required
 python3 monitoring/capacity_promql_cases.py | promtool test rules /dev/stdin
+python3 monitoring/storage_alert_cases.py | promtool test rules /dev/stdin
 ```
 
 The Resource monitoring workflow runs these checks and publishes an exporter image. Production pins its digest. Unit coverage includes actual usage versus limits, shared-volume deduplication, missing/stopped services, deleted nodes, old Pod UIDs, task-role ownership, cross-organization isolation, cyclic roles, and stale collection failures. Promtool evaluates the actual dashboard expressions for CPU, memory and disk, including 100 GB / 1 TB = 10%, exclusion of dedicated-master capacity, duplicate HA collectors, empty users, missing samples and contradictory samples.

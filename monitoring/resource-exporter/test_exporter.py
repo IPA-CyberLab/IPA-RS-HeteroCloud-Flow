@@ -131,6 +131,37 @@ class ResourceTests(unittest.TestCase):
         self.assertEqual(e.quantity('500m'), .5)
         self.assertEqual(e.quantity('8Gi'), 8 * 2**30)
 
+    def test_storage_health_distinguishes_degraded_unknown_and_unavailable(self):
+        volumes = [
+            {'metadata': {'name': 'vol-good'}, 'status': {'robustness': 'healthy'}},
+            {'metadata': {'name': 'vol-bad'}, 'status': {'robustness': 'degraded'}},
+            {'metadata': {'name': 'vol-unknown'}, 'status': {}},
+            {'metadata': {'name': 'vol-deleted', 'deletionTimestamp': '2026-01-01T00:00:00Z'},
+             'status': {'robustness': 'faulted'}},
+        ]
+        result = e.aggregate(*sample(), storage_enabled=True, storage_volumes=volumes)
+        self.assertEqual(values(result, 'heterocloud_storage_inventory_success'), [1])
+        self.assertIn('state="healthy",volume="vol-good"', result)
+        self.assertIn('state="degraded",volume="vol-bad"', result)
+        self.assertIn('state="unknown",volume="vol-unknown"', result)
+        self.assertNotIn('vol-deleted', result)
+        unavailable = e.aggregate(*sample(), storage_enabled=True, storage_volumes=None)
+        self.assertEqual(values(unavailable, 'heterocloud_storage_inventory_success'), [0])
+        self.assertNotIn('heterocloud_storage_volume_robustness', unavailable)
+        self.assertNotIn('heterocloud_storage_inventory_success', e.aggregate(*sample()))
+
+    def test_storage_inventory_requires_every_page_and_unique_volumes(self):
+        pages = [
+            {'items': [{'metadata': {'name': 'v1'}}], 'metadata': {'continue': 'next/token'}},
+            {'items': [{'metadata': {'name': 'v2'}}], 'metadata': {}},
+        ]
+        with patch.object(e, 'kget', side_effect=pages) as request:
+            self.assertEqual(len(e.storage_inventory()), 2)
+        self.assertIn('continue=next%2Ftoken', request.call_args_list[1].args[0])
+        pages[1]['items'][0]['metadata']['name'] = 'v1'
+        with patch.object(e, 'kget', side_effect=pages), self.assertRaises(ValueError):
+            e.storage_inventory()
+
 
 if __name__ == '__main__':
     unittest.main()

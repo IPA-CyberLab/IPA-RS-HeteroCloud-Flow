@@ -37,6 +37,12 @@ jobs:
             --entrypoint /bin/promtool \
             prom/prometheus:v3.13.2-distroless@sha256:64f71bb84e03c855948418b0fc5dea53e9543d8e3fc9931598f583805507f05e \
             test rules /dev/stdin
+      - name: Verify storage health and missing-inventory alert expressions
+        run: |
+          python monitoring/storage_alert_cases.py | docker run --rm -i \
+            --entrypoint /bin/promtool \
+            prom/prometheus:v3.13.2-distroless@sha256:64f71bb84e03c855948418b0fc5dea53e9543d8e3fc9931598f583805507f05e \
+            test rules /dev/stdin
       - run: bash deploy/helm/heterocloud-flow/scripts/test-grafana-template.sh
       - run: bash deploy/helm/heterocloud-flow/scripts/test-prometheus-template.sh
 
