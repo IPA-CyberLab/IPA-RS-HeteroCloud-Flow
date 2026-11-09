@@ -208,6 +208,10 @@ coturn:
   nodeSelector: {}
 
 monitoring:
+  postgresDcs:
+    enabled: true
+    targets: ['10.250.0.2:19181', '10.250.0.10:19181']
+    expectedActivePeers: 2
   securityInventory:
     enabled: true
     targets: ['10.250.0.2:19765']

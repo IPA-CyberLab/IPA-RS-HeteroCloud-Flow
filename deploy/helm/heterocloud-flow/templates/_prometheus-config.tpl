@@ -27,6 +27,15 @@ data:
     rule_files:
       - /etc/prometheus/rules.yml
     scrape_configs:
+      {{- if .Values.monitoring.postgresDcs.enabled }}
+      {{- if empty .Values.monitoring.postgresDcs.targets }}
+      {{- fail "monitoring.postgresDcs.targets is required when PostgreSQL DCS monitoring is enabled" }}
+      {{- end }}
+      - job_name: heterocloud-postgres-dcs
+        static_configs:
+          - targets: {{ .Values.monitoring.postgresDcs.targets | toJson }}
+        scrape_timeout: 5s
+      {{- end }}
       {{- if .Values.monitoring.securityInventory.enabled }}
       {{- if empty .Values.monitoring.securityInventory.targets }}
       {{- fail "monitoring.securityInventory.targets is required when security inventory is enabled" }}
@@ -372,6 +381,36 @@ data:
               severity: warning
             annotations:
               summary: Kubernetes node memory working set is above 85 percent
+          {{- if .Values.monitoring.postgresDcs.enabled }}
+          - alert: HeteroPostgresDCSMetricsUnavailable
+            expr: (count(up{job="heterocloud-postgres-dcs"} == 1) or vector(0)) < {{ len .Values.monitoring.postgresDcs.targets }}
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: PostgreSQL DCS health metrics are unavailable on a monitored node
+          - alert: HeteroPostgresDCSLeaderMissing
+            expr: heteronetwork_postgres_dcs_has_leader{job="heterocloud-postgres-dcs"} == 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: A PostgreSQL DCS member cannot see a leader
+          - alert: HeteroPostgresDCSPeerMissing
+            expr: heteronetwork_postgres_dcs_active_peers{job="heterocloud-postgres-dcs"} < {{ .Values.monitoring.postgresDcs.expectedActivePeers }}
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: A PostgreSQL DCS member has fewer active peers than configured
+          - alert: HeteroPostgresDCSFrequentElections
+            expr: increase(heteronetwork_postgres_dcs_leader_changes_total{job="heterocloud-postgres-dcs"}[10m]) > 2
+            for: 1m
+            labels:
+              severity: warning
+            annotations:
+              summary: PostgreSQL DCS leader elections are recurring
+          {{- end }}
           - alert: HeteroNodeMetricsUnavailable
             expr: max by (node, job) (up{job=~"kubernetes-nodes-(resource|cadvisor)"}) == 0
             for: 2m

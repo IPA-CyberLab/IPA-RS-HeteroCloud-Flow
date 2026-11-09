@@ -255,6 +255,10 @@ externalRedis:
   sentinelPasswordSecretKey: ""
 
 monitoring:
+  postgresDcs:
+    enabled: false
+    targets: []
+    expectedActivePeers: 2
   securityInventory:
     enabled: false
     # Targets must use the private network; only aggregate counts are exposed.

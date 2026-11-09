@@ -676,6 +676,21 @@
         "grafana"
       ],
       "properties": {
+        "postgresDcs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "targets", "expectedActivePeers"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "targets": {
+              "type": "array",
+              "maxItems": 9,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 3}
+            },
+            "expectedActivePeers": {"type": "integer", "minimum": 1, "maximum": 8}
+          }
+        },
         "resourceExporter": {
           "type": "object",
           "additionalProperties": false,
