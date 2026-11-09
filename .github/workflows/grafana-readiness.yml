@@ -1,0 +1,38 @@
+name: Grafana UI readiness
+on:
+  push:
+    branches: [master, codex/grafana-readiness-ci]
+    paths:
+      - 'deploy/helm/heterocloud-flow/**'
+      - 'deploy/environments/heteronet/values.yaml'
+      - 'scripts/test-grafana-readiness-e2e.py'
+      - '.github/workflows/grafana-readiness.yml'
+  pull_request:
+    paths:
+      - 'deploy/helm/heterocloud-flow/**'
+      - 'deploy/environments/heteronet/values.yaml'
+      - 'scripts/test-grafana-readiness-e2e.py'
+      - '.github/workflows/grafana-readiness.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+      - run: python -m pip install PyYAML==6.0.3
+      - name: Verify rendered Helm configuration
+        run: bash deploy/helm/heterocloud-flow/scripts/test-grafana-template.sh
+      - uses: helm/kind-action@v1.12.0
+        with:
+          cluster_name: grafana-readiness
+      - name: Verify slow UI is removed and restored by Kubernetes
+        run: python scripts/test-grafana-readiness-e2e.py

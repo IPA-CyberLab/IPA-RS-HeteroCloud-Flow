@@ -419,10 +419,14 @@ spec:
               value: browser
           readinessProbe:
             httpGet:
-              path: /api/health
+              # A healthy API can coexist with a stalled rendered login page.
+              # Remove slow replicas from Service and overlay DNS discovery.
+              path: /login
               port: {{ $grafana.listenPort }}
             periodSeconds: 10
-            timeoutSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 3
+            successThreshold: 2
           livenessProbe:
             httpGet:
               path: /api/health
