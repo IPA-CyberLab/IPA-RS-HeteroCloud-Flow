@@ -22,7 +22,9 @@ import time
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/login" and Path("/tmp/slow").exists():
-            time.sleep(4)
+            # A 1.6-second backend passes the old two-second readiness probe
+            # but leaves too little of a three-second VPN/browser budget.
+            time.sleep(1.6)
         if self.path not in ("/api/health", "/login"):
             self.send_error(404)
             return
@@ -77,7 +79,7 @@ def main():
     container = deployments[0]["spec"]["template"]["spec"]["containers"][0]
     probe = copy.deepcopy(container["readinessProbe"])
     assert probe["httpGet"]["path"] == "/login"
-    assert probe["timeoutSeconds"] == 2 and probe["failureThreshold"] == 3
+    assert probe["timeoutSeconds"] == 1 and probe["failureThreshold"] == 3
     assert probe["successThreshold"] == 2
     assert container["livenessProbe"]["httpGet"]["path"] == "/api/health"
     assert container["startupProbe"]["httpGet"]["path"] == "/api/health"
@@ -109,8 +111,11 @@ def main():
         kubectl("-n", NAMESPACE, "exec", "slow", "--", "python", "-c",
                 "import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=1).status == 200")
         await_endpoints({"healthy"})
+        # If the fast replica goes away, the recovered peer must be usable.
+        kubectl("-n", NAMESPACE, "delete", "pod", "healthy", "--wait=true")
+        await_endpoints(set())
         kubectl("-n", NAMESPACE, "exec", "slow", "--", "rm", "-f", "/tmp/slow")
-        await_endpoints({"healthy", "slow"})
+        await_endpoints({"slow"})
     finally:
         subprocess.run(["kubectl", "delete", "namespace", NAMESPACE, "--ignore-not-found", "--wait=false"], check=False)
 

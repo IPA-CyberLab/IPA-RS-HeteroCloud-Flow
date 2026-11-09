@@ -1,7 +1,7 @@
 name: Grafana UI readiness
 on:
   push:
-    branches: [master, codex/grafana-readiness-ci]
+    branches: [master, codex/grafana-readiness-ci, codex/grafana-latency-budget]
     paths:
       - 'deploy/helm/heterocloud-flow/**'
       - 'deploy/environments/heteronet/values.yaml'

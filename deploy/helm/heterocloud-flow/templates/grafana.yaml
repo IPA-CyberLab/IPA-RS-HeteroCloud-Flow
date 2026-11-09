@@ -420,11 +420,12 @@ spec:
           readinessProbe:
             httpGet:
               # A healthy API can coexist with a stalled rendered login page.
+              # Keep two seconds of the three-second budget for the VPN path.
               # Remove slow replicas from Service and overlay DNS discovery.
               path: /login
               port: {{ $grafana.listenPort }}
             periodSeconds: 10
-            timeoutSeconds: 2
+            timeoutSeconds: 1
             failureThreshold: 3
             successThreshold: 2
           livenessProbe:

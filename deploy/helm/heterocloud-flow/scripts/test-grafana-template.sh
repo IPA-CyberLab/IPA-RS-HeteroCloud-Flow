@@ -39,7 +39,7 @@ grep -q 'path: /etc/grafana/dashboards' "$work_dir/grafana.yaml"
 # A responsive health endpoint does not guarantee the actual UI is responsive.
 awk '/^          readinessProbe:/{p=1} /^          livenessProbe:/{p=0} p' "$work_dir/grafana.yaml" > "$work_dir/readiness.yaml"
 grep -q 'path: /login' "$work_dir/readiness.yaml"
-grep -q 'timeoutSeconds: 2' "$work_dir/readiness.yaml"
+grep -q 'timeoutSeconds: 1' "$work_dir/readiness.yaml"
 grep -q 'failureThreshold: 3' "$work_dir/readiness.yaml"
 grep -q 'successThreshold: 2' "$work_dir/readiness.yaml"
 awk '/^          livenessProbe:/{p=1} /^          resources:/{p=0} p' "$work_dir/grafana.yaml" > "$work_dir/liveness.yaml"
