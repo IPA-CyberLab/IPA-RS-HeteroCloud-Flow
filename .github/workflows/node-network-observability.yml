@@ -1,0 +1,37 @@
+name: Node network observability
+on:
+  push:
+    branches: [master, codex/node-network-observability]
+    paths:
+      - 'deploy/helm/heterocloud-flow/**'
+      - 'deploy/environments/heteronet/values.yaml'
+      - 'monitoring/network_alert_cases.py'
+      - '.github/workflows/node-network-observability.yml'
+  pull_request:
+    paths:
+      - 'deploy/helm/heterocloud-flow/**'
+      - 'deploy/environments/heteronet/values.yaml'
+      - 'monitoring/network_alert_cases.py'
+      - '.github/workflows/node-network-observability.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+      - run: python -m pip install PyYAML==6.0.3
+      - run: bash deploy/helm/heterocloud-flow/scripts/test-prometheus-template.sh
+      - name: Verify discovery and receive-error alert expressions
+        run: |
+          python monitoring/network_alert_cases.py | docker run --rm -i \
+            --entrypoint /bin/promtool \
+            prom/prometheus:v3.13.2-distroless@sha256:64f71bb84e03c855948418b0fc5dea53e9543d8e3fc9931598f583805507f05e \
+            test rules /dev/stdin

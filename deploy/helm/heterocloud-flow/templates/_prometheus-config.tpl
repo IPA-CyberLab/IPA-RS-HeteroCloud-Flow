@@ -139,6 +139,9 @@ data:
         kubernetes_sd_configs:
           - role: node
         relabel_configs:
+          - source_labels: [__meta_kubernetes_node_label_heteronetwork_io_lifecycle]
+            action: drop
+            regex: stopped
           - source_labels: [__meta_kubernetes_node_name]
             target_label: node
           - target_label: __address__
@@ -157,6 +160,9 @@ data:
         kubernetes_sd_configs:
           - role: node
         relabel_configs:
+          - source_labels: [__meta_kubernetes_node_label_heteronetwork_io_lifecycle]
+            action: drop
+            regex: stopped
           - source_labels: [__meta_kubernetes_node_name]
             target_label: node
           - target_label: __address__
@@ -171,6 +177,9 @@ data:
         kubernetes_sd_configs:
           - role: node
         relabel_configs:
+          - source_labels: [__meta_kubernetes_node_label_heteronetwork_io_lifecycle]
+            action: drop
+            regex: stopped
           - source_labels: [__meta_kubernetes_node_address_InternalIP]
             action: keep
             regex: .+
@@ -363,6 +372,27 @@ data:
               severity: warning
             annotations:
               summary: Kubernetes node memory working set is above 85 percent
+          - alert: HeteroNodeMetricsUnavailable
+            expr: max by (node, job) (up{job=~"kubernetes-nodes-(resource|cadvisor)"}) == 0
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: Kubernetes node resource or network metrics are unavailable
+          - alert: HeteroNodeNetworkReceiveErrors
+            expr: sum by (node, interface) (rate(container_network_receive_errors_total{job="kubernetes-nodes-cadvisor",id="/",interface!="lo"}[5m])) > 1
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: A node network interface has sustained receive errors
+          - alert: HeteroNodeNetworkReceiveDrops
+            expr: sum by (node, interface) (rate(container_network_receive_packets_dropped_total{job="kubernetes-nodes-cadvisor",id="/",interface!="lo"}[5m])) > 1
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: A node network interface has sustained receive drops
           {{- if $prometheus.heteronetwork.enabled }}
           - alert: HeteroNetworkAgentMetricsMissing
             expr: absent(up{job="heteronetwork-agents"}) or min(up{job="heteronetwork-agents"}) < 1
