@@ -1,0 +1,28 @@
+name: Helm scheduling checks
+
+on:
+  push:
+    paths:
+      - 'deploy/helm/heterocloud-flow/**'
+      - 'deploy/environments/heteronet/**'
+      - '.github/workflows/helm-scheduling.yml'
+  pull_request:
+    paths:
+      - 'deploy/helm/heterocloud-flow/**'
+      - 'deploy/environments/heteronet/**'
+      - '.github/workflows/helm-scheduling.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chart:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - name: Check scheduling and availability constraints
+        run: bash deploy/helm/heterocloud-flow/scripts/test-scheduling-template.sh

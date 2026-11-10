@@ -18,6 +18,21 @@ for component in api matchmaker signaling livekit; do
   grep -q '^          nodeTaintsPolicy: Honor$' "$tmp_dir/${component}.yaml"
 done
 
+# Small two-worker clusters may reduce these components to two replicas, while
+# a single replica must remain rejected by the chart's availability contract.
+for component in api matchmaker signaling livekit; do
+  helm template flow "$chart_dir" -f "$environment_values" \
+    --namespace heterocloud-flow --set "${component}.replicaCount=2" \
+    --show-only "templates/${component}.yaml" >"$tmp_dir/${component}-two.yaml"
+  grep -q '^  replicas: 2$' "$tmp_dir/${component}-two.yaml"
+  if helm template flow "$chart_dir" -f "$environment_values" \
+      --namespace heterocloud-flow --set "${component}.replicaCount=1" \
+      >"$tmp_dir/${component}-one.yaml" 2>/dev/null; then
+    echo "$component unexpectedly accepted one replica" >&2
+    exit 1
+  fi
+done
+
 for component in prometheus grafana; do
   grep -q '^  replicas: 3$' "$tmp_dir/${component}.yaml"
   grep -q '^  minAvailable: 1$' "$tmp_dir/${component}.yaml"

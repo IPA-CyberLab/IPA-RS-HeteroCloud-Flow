@@ -215,7 +215,7 @@
       "properties": {
         "replicaCount": {
           "type": "integer",
-          "minimum": 3,
+          "minimum": 2,
           "maximum": 16
         },
         "publicUrls": {
@@ -266,7 +266,7 @@
       "properties": {
         "replicaCount": {
           "type": "integer",
-          "minimum": 3
+          "minimum": 2
         }
       }
     },
@@ -280,7 +280,7 @@
       "properties": {
         "replicaCount": {
           "type": "integer",
-          "minimum": 3
+          "minimum": 2
         },
         "publicUrls": {
           "type": "array",
@@ -336,7 +336,7 @@
       "properties": {
         "replicaCount": {
           "type": "integer",
-          "minimum": 3
+          "minimum": 2
         },
         "publicUrls": {
           "type": "array",
