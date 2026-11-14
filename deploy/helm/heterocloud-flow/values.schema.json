@@ -676,6 +676,15 @@
         "grafana"
       ],
       "properties": {
+        "publicDnsQuorum": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "namespace"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "namespace": {"type": "string", "minLength": 1, "maxLength": 63}
+          }
+        },
         "postgresDcs": {
           "type": "object",
           "additionalProperties": false,

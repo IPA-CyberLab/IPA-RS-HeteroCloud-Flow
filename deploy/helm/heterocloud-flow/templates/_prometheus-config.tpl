@@ -381,6 +381,50 @@ data:
               severity: warning
             annotations:
               summary: Kubernetes node memory working set is above 85 percent
+          {{- if .Values.monitoring.publicDnsQuorum.enabled }}
+          - alert: HeteroPublicDNSMetricsUnavailable
+            expr: (count(up{job="kubernetes-services-annotated",namespace={{ .Values.monitoring.publicDnsQuorum.namespace | quote }},service="public-dns-quorum-metrics"} == 1) or vector(0)) < 1
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: Public DNS quorum metrics cannot be scraped
+          - alert: HeteroPublicDNSStatusStale
+            expr: (time() - max(heteronetwork_public_dns_observed_timestamp_seconds{namespace={{ .Values.monitoring.publicDnsQuorum.namespace | quote }},service="public-dns-quorum-metrics"}) > 60) or absent(heteronetwork_public_dns_observed_timestamp_seconds{namespace={{ .Values.monitoring.publicDnsQuorum.namespace | quote }},service="public-dns-quorum-metrics"})
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: Public DNS quorum status is stale or unavailable
+          - alert: HeteroPublicDNSQuorumUnavailable
+            expr: (max(heteronetwork_public_dns_fresh_voters{namespace={{ .Values.monitoring.publicDnsQuorum.namespace | quote }},service="public-dns-quorum-metrics"}) or vector(0)) < (max(heteronetwork_public_dns_majority_required{namespace={{ .Values.monitoring.publicDnsQuorum.namespace | quote }},service="public-dns-quorum-metrics"}) or vector(2))
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: Public DNS cannot safely change targets without a fresh majority
+          - alert: HeteroPublicDNSOriginUnhealthy
+            expr: max by (origin) (heteronetwork_public_dns_origin_decision{namespace={{ .Values.monitoring.publicDnsQuorum.namespace | quote }},service="public-dns-quorum-metrics",decision="unhealthy"}) == 1
+            for: 1m
+            labels:
+              severity: warning
+            annotations:
+              summary: Public gateway origin is unreachable from a majority of observers
+          - alert: HeteroPublicDNSOriginUnknown
+            expr: max by (origin) (heteronetwork_public_dns_origin_decision{namespace={{ .Values.monitoring.publicDnsQuorum.namespace | quote }},service="public-dns-quorum-metrics",decision="unknown"}) == 1
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: Public gateway origin health has no observer majority
+          - alert: HeteroPublicDNSProbeSlow
+            expr: (max by (voter, origin) (heteronetwork_public_dns_probe_duration_seconds{namespace={{ .Values.monitoring.publicDnsQuorum.namespace | quote }},service="public-dns-quorum-metrics"}) > 3) and on (voter, origin) (max by (voter, origin) (heteronetwork_public_dns_probe_healthy{namespace={{ .Values.monitoring.publicDnsQuorum.namespace | quote }},service="public-dns-quorum-metrics"}) == 1)
+            for: 3m
+            labels:
+              severity: warning
+            annotations:
+              summary: Public gateway HTTPS and HTTP probe is persistently slow
+          {{- end }}
           {{- if .Values.monitoring.postgresDcs.enabled }}
           - alert: HeteroPostgresDCSMetricsUnavailable
             expr: (count(up{job="heterocloud-postgres-dcs"} == 1) or vector(0)) < {{ len .Values.monitoring.postgresDcs.targets }}

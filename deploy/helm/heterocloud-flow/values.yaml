@@ -255,6 +255,10 @@ externalRedis:
   sentinelPasswordSecretKey: ""
 
 monitoring:
+  publicDnsQuorum:
+    # Enable when the platform publishes HeteroNetwork DNS quorum metrics.
+    enabled: false
+    namespace: heterocloud-dns
   postgresDcs:
     enabled: false
     targets: []

@@ -49,6 +49,12 @@ jobs:
             --entrypoint /bin/promtool \
             prom/prometheus:v3.13.2-distroless@sha256:64f71bb84e03c855948418b0fc5dea53e9543d8e3fc9931598f583805507f05e \
             test rules /dev/stdin
+      - name: Verify public DNS quorum and latency alerts
+        run: |
+          python monitoring/public_dns_alert_cases.py | docker run --rm -i \
+            --entrypoint /bin/promtool \
+            prom/prometheus:v3.13.2-distroless@sha256:64f71bb84e03c855948418b0fc5dea53e9543d8e3fc9931598f583805507f05e \
+            test rules /dev/stdin
       - name: Verify media alerts when one or all targets disappear
         run: |
           python monitoring/flow_media_alert_cases.py | docker run --rm -i \
