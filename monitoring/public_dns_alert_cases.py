@@ -26,6 +26,8 @@ tests = [
          {'series':'heteronetwork_public_dns_origin_decision{origin="east",decision="unknown"}', 'values':'1x10'},
          {'series':'heteronetwork_public_dns_probe_duration_seconds{voter="west",origin="east"}', 'values':'3.5x10'},
          {'series':'heteronetwork_public_dns_probe_healthy{voter="west",origin="east"}', 'values':'1x10'},
+         {'series':'heteronetwork_overlay_dns_probe_attempts_total{voter="west",server="east"}', 'values':'0+12x10'},
+         {'series':'heteronetwork_overlay_dns_probe_failures_total{voter="west",server="east"}', 'values':'0+3x10'},
      ], 'promql_expr_test':[
          {'expr':rules['HeteroPublicDNSQuorumUnavailable'], 'eval_time':'6m',
           'exp_samples':[{'labels':'{}','value':1}]},
@@ -33,6 +35,8 @@ tests = [
           'exp_samples':[{'labels':'{origin="east"}','value':1}]},
          {'expr':rules['HeteroPublicDNSProbeSlow'], 'eval_time':'6m',
           'exp_samples':[{'labels':'{origin="east",voter="west"}','value':3.5}]},
+         {'expr':rules['HeteroOverlayDNSProbeFailures'], 'eval_time':'6m',
+          'exp_samples':[{'labels':'{server="east",voter="west"}','value':0.25}]},
      ]},
     {'name':'healthy-quorum-does-not-alert', 'interval':'1m',
      'input_series':[
@@ -41,10 +45,13 @@ tests = [
          {'series':'heteronetwork_public_dns_origin_decision{origin="east",decision="unknown"}', 'values':'0x10'},
          {'series':'heteronetwork_public_dns_probe_duration_seconds{voter="west",origin="east"}', 'values':'0.3x10'},
          {'series':'heteronetwork_public_dns_probe_healthy{voter="west",origin="east"}', 'values':'1x10'},
+         {'series':'heteronetwork_overlay_dns_probe_attempts_total{voter="west",server="east"}', 'values':'0+12x10'},
+         {'series':'heteronetwork_overlay_dns_probe_failures_total{voter="west",server="east"}', 'values':'0x10'},
      ], 'promql_expr_test':[
          {'expr':rules['HeteroPublicDNSQuorumUnavailable'], 'eval_time':'6m', 'exp_samples':[]},
          {'expr':rules['HeteroPublicDNSOriginUnknown'], 'eval_time':'6m', 'exp_samples':[]},
          {'expr':rules['HeteroPublicDNSProbeSlow'], 'eval_time':'6m', 'exp_samples':[]},
+         {'expr':rules['HeteroOverlayDNSProbeFailures'], 'eval_time':'6m', 'exp_samples':[]},
      ]},
     {'name':'missing-metrics-are-not-healthy', 'interval':'1m', 'input_series':[],
      'promql_expr_test':[

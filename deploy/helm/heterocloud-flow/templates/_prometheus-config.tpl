@@ -424,6 +424,13 @@ data:
               severity: warning
             annotations:
               summary: Public gateway HTTPS and HTTP probe is persistently slow
+          - alert: HeteroOverlayDNSProbeFailures
+            expr: (max by (voter, server) (increase(heteronetwork_overlay_dns_probe_failures_total{namespace={{ .Values.monitoring.publicDnsQuorum.namespace | quote }},service="public-dns-quorum-metrics"}[5m])) / clamp_min(max by (voter, server) (increase(heteronetwork_overlay_dns_probe_attempts_total{namespace={{ .Values.monitoring.publicDnsQuorum.namespace | quote }},service="public-dns-quorum-metrics"}[5m])), 1) > 0.1) and on (voter, server) (max by (voter, server) (increase(heteronetwork_overlay_dns_probe_attempts_total{namespace={{ .Values.monitoring.publicDnsQuorum.namespace | quote }},service="public-dns-quorum-metrics"}[5m])) >= 10)
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: Overlay DNS queries are repeatedly failing between workers
           {{- end }}
           {{- if .Values.monitoring.postgresDcs.enabled }}
           - alert: HeteroPostgresDCSMetricsUnavailable
